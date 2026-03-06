@@ -372,14 +372,13 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
 }
 
 void OverviewController::renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now) {
-    if (!m_renderWorkspaceWindowsOriginal || !monitor || !workspace || !isVisible() || !ownsMonitor(monitor) || !ownsWorkspace(workspace)) {
-        if (m_renderWorkspaceWindowsFullscreenOriginal) {
-            m_renderWorkspaceWindowsFullscreenOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
-        }
+    if (!m_renderWorkspaceWindowsFullscreenOriginal)
         return;
-    }
 
-    m_renderWorkspaceWindowsOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
+    // Keep Hyprland's fullscreen workspace path intact. Forcing it through the
+    // non-fullscreen renderer can leave the workspace in a broken state on
+    // newer Hyprland builds, which matches the "all windows disappear" failure.
+    m_renderWorkspaceWindowsFullscreenOriginal(rendererThisptr, std::move(monitor), std::move(workspace), now);
 }
 
 LayoutConfig OverviewController::loadLayoutConfig() const {
@@ -704,16 +703,10 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
 }
 
 void OverviewController::beginClose() {
-    if (!isVisible() || m_state.phase == Phase::Closing)
+    if (!isVisible())
         return;
 
-    m_state.phase = Phase::Closing;
-    m_state.animationProgress = 0.0;
-    m_state.animationStart = std::chrono::steady_clock::now();
-
-    if (m_state.ownerMonitor) {
-        g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
-    }
+    deactivate();
 }
 
 void OverviewController::deactivate() {
