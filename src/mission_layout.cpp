@@ -63,13 +63,16 @@ bool keepSameRow(const Row& row, double candidateWidth, double idealRowWidth) {
     return std::abs(1.0 - newRatio) < std::abs(1.0 - oldRatio);
 }
 
-Rect insetArea(const Rect& area, double padding) {
-    const double twice = std::max(0.0, padding * 2.0);
+Rect insetArea(const Rect& area, const LayoutConfig& config) {
+    const double top = std::max(0.0, config.outerPaddingTop);
+    const double right = std::max(0.0, config.outerPaddingRight);
+    const double bottom = std::max(0.0, config.outerPaddingBottom);
+    const double left = std::max(0.0, config.outerPaddingLeft);
     return {
-        area.x + padding,
-        area.y + padding,
-        std::max(1.0, area.width - twice),
-        std::max(1.0, area.height - twice),
+        area.x + left,
+        area.y + top,
+        std::max(1.0, area.width - left - right),
+        std::max(1.0, area.height - top - bottom),
     };
 }
 
@@ -101,9 +104,11 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
     const double idealRowWidth = totalWidth / static_cast<double>(numRows);
 
     std::vector<PreparedWindow> sorted = prepared;
-    std::sort(sorted.begin(), sorted.end(), [](const PreparedWindow& a, const PreparedWindow& b) {
-        return a.input.natural.centerY() < b.input.natural.centerY();
-    });
+    if (!config.preserveInputOrder) {
+        std::sort(sorted.begin(), sorted.end(), [](const PreparedWindow& a, const PreparedWindow& b) {
+            return a.input.natural.centerY() < b.input.natural.centerY();
+        });
+    }
 
     std::size_t windowIdx = 0;
     for (std::size_t rowIndex = 0; rowIndex < numRows; ++rowIndex) {
@@ -121,9 +126,11 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
         }
 
         if (!row.windows.empty()) {
-            std::sort(row.windows.begin(), row.windows.end(), [](const PreparedWindow& a, const PreparedWindow& b) {
-                return a.input.natural.centerX() < b.input.natural.centerX();
-            });
+            if (!config.preserveInputOrder) {
+                std::sort(row.windows.begin(), row.windows.end(), [](const PreparedWindow& a, const PreparedWindow& b) {
+                    return a.input.natural.centerX() < b.input.natural.centerX();
+                });
+            }
             candidate.maxColumns = std::max(candidate.maxColumns, row.windows.size());
             candidate.gridWidth = std::max(candidate.gridWidth, row.fullWidth);
             candidate.gridHeight += row.fullHeight;
@@ -234,7 +241,7 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
     if (windows.empty())
         return {};
 
-    const Rect inner = insetArea(area, config.outerPadding);
+    const Rect inner = insetArea(area, config);
     const auto prepared = prepareWindows(windows, inner, config);
 
     std::optional<LayoutCandidate> best;

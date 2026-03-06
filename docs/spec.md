@@ -6,7 +6,7 @@
 
 `hymission` 的目标是提供一个 Mission Control 风格的窗口 overview：
 
-- 作用范围是当前显示器的当前工作区
+- 作用范围由 dispatcher 参数和默认 scope 配置共同决定
 - overview 中每个窗口显示为一个等比缩放的 preview
 - preview 在视觉上尽量保留窗口原始空间关系
 - overview 退出后，不改变窗口的真实位置、大小和客户端逻辑分辨率
@@ -21,7 +21,7 @@
 
 v1 必做：
 
-- 当前 monitor / 当前 workspace 的窗口 overview
+- scope-aware overview：支持默认配置范围、`onlycurrentworkspace` 和 `forceall`
 - 打开 / 关闭 overview
 - compositor-side preview 几何计算
 - preview 渲染
@@ -42,16 +42,18 @@ v1 不做：
 
 v1 overview 纳入：
 
-- 当前 monitor 的活动 workspace 上
+- scope 选中的普通 workspace 上
 - 已映射
 - 可见
 - 非 desktop component
 - 有有效渲染尺寸的普通窗口
+- scope 参与 monitor 上可见的 pinned 浮窗，即使其 `m_workspace` 仍指向之前的 workspace
+- 当 `show_special = 1` 或 `forceall` 时，scope 参与 monitor 上当前可见的 special workspace 窗口
 
 v1 overview 排除：
 
 - desktop components
-- 当前 workspace 之外的窗口
+- scope 之外的窗口
 - 未映射窗口
 - 不可见窗口
 - popup / subsurface 的独立 overview 管理
@@ -60,6 +62,7 @@ v1 overview 排除：
 
 - popup 可以在后续版本考虑跟随主窗口整体处理
 - v1 文档直接把 popup 定义为未完整支持，避免实现时误扩范围
+- pinned 只按“当前 monitor 上当前可见”纳入，不把其他 monitor 的 sticky 浮窗带进来
 
 ## 4. 布局语义
 
@@ -109,6 +112,11 @@ v1 默认布局算法固定为 row-based strategy：
 
 这意味着 v1 默认偏向更大的 preview，而不是机械追求铺满屏幕。
 
+稳定性补充：
+
+- 如果 overview 已经打开，且 rebuild 前后参与窗口集合与参与 monitor 集合未变化，则 preview 应优先保持既有 slot 顺序和 monitor 归属
+- scrolling 或 focus-driven 几何波动可以触发 preview 尺寸更新，但不应仅因这些波动就把 preview 彼此换位
+
 ### 4.4 特殊窗口
 
 - 单窗口：overview 不应把窗口无意义缩到很小，应尽量保持大尺寸居中显示
@@ -137,23 +145,37 @@ v1 采用 compositor-side preview 渲染。
 
 ### 6.1 打开 / 关闭
 
-v1 预留 dispatcher 名称：
+v1 dispatcher 名称固定为：
 
 - `hymission:toggle`
 - `hymission:open`
 - `hymission:close`
 
-当前仓库还未实现这些 dispatcher，但后续实现必须使用这些名称，不再另起命名。
+`hymission:toggle` 和 `hymission:open` 支持以下可选参数：
+
+- 空参数：走默认 scope 配置
+- `onlycurrentworkspace`：只展示 anchor monitor 的当前普通 workspace，不纳入 special workspace
+- `forceall`：跨所有 monitor 展示所有普通 workspace，并额外纳入当前可见的 special workspace
+
+约束：
+
+- `toggle,*` 在 overview 已可见时总是执行关闭，参数在关闭路径上忽略
+- `open,*` 在 overview 已可见时，如果 scope 与当前不同，应直接重建到新的 scope；如果 scope 相同，则 no-op
+- 未知参数必须返回 dispatcher error，不得静默回退
 
 ### 6.2 鼠标
 
 - 鼠标移动到 preview 上时，高亮该 preview
+- 如果 `overview_focus_follows_mouse = 1`，鼠标移动到 preview 上时，overview 内部当前选中项也随之切换
 - 左键点击 preview：激活对应窗口并退出 overview
-- 点击 overview 空白区域：v1 不切换窗口，直接退出 overview
+- 点击 overview 空白区域：退出 overview；当 `overview_focus_follows_mouse = 0` 时不切换窗口，当 `overview_focus_follows_mouse = 1` 时提交当前选中的 preview
+- overview 激活期间可以临时关闭真实窗口侧的 `input:follow_mouse`，避免 compositor 的真实 focus 被光标移动带着变化；退出 overview 后必须恢复原值
+- 即使 `overview_focus_follows_mouse = 1`，overview 打开期间也不持续改真实活动窗口；真实 focus 只在点击 preview、按 `Return`，或退出 overview 时一次性提交
+- 对 scrolling 工作区，如果退出 overview 会改变真实 focus，则必须先等真实 layout 收敛到目标 focus 对应的位置，再开始 close 动画；close 动画不得先飞回 overview 打开前的旧几何
 
 ### 6.3 键盘
 
-- `Esc`：退出 overview，不改变当前活动窗口
+- `Esc`：退出 overview；当 `overview_focus_follows_mouse = 0` 时不改变当前活动窗口，当 `overview_focus_follows_mouse = 1` 时提交到当前选中的 preview
 - `Left/Right/Up/Down`：在 preview 间移动选择
 - 方向选择规则：按 preview box 几何关系选择对应方向的最近邻
 - `Return`：激活当前选中窗口并退出 overview
@@ -162,24 +184,47 @@ v1 预留 dispatcher 名称：
 
 ## 7. 多显示器与工作区语义
 
-v1 固定为：
+v1 的 overview scope 由默认配置和 dispatcher override 共同决定。
 
-- 只作用于当前光标所在 monitor
-- 只展示该 monitor 当前活动 workspace
+默认配置：
+
+- `only_active_workspace = 1`：每个参与 monitor 只纳入其当前活动普通 workspace
+- `only_active_workspace = 0`：每个参与 monitor 纳入其全部普通 workspace
+- `only_active_monitor = 1`：只纳入光标所在 monitor
+- `only_active_monitor = 0`：纳入所有 monitor
+- `show_special = 1`：额外纳入参与 monitor 上当前可见的 special workspace
+- `show_special = 0`：不纳入 special workspace
+
+dispatcher override：
+
+- `onlycurrentworkspace`：忽略默认 scope 配置，只展示 anchor monitor 的当前普通 workspace
+- `forceall`：忽略默认 scope 配置，跨所有 monitor 展示所有普通 workspace，并额外纳入当前可见的 special workspace
+
+多 monitor 语义：
+
+- 每个参与 monitor 都有自己的 overview backdrop 和 slot 布局区域
+- preview 几何使用全局坐标，所以鼠标命中和方向导航允许跨 monitor
+- 没有参与窗口的 monitor 不应进入 overview 渲染
 
 不做：
 
-- 多 monitor 同时 overview
-- 跨 monitor 统一 overview 画布
 - workspace 条带
+- 把所有 monitor 的窗口压缩进单一 monitor 画布
 
-这些都留到 v2 之后处理。
+workspace 切换补充语义：
+
+- overview 打开时，触控板 workspace swipe 仍应保持可用
+- 如果 workspace swipe 或其他手段导致 owner monitor 的活动 workspace 变化，overview 应在工作区切换成立后退出
+- overview 不得通过持续 `rawWindowFocus(...)` 把工作区切换强行拉回原 workspace
 
 ## 8. 当前配置面
 
 当前已注册配置项如下：
 
-- `outer_padding`
+- `outer_padding_top`
+- `outer_padding_right`
+- `outer_padding_bottom`
+- `outer_padding_left`
 - `row_spacing`
 - `column_spacing`
 - `min_window_length`
@@ -188,11 +233,19 @@ v1 固定为：
 - `min_slot_scale`
 - `layout_scale_weight`
 - `layout_space_weight`
+- `overview_focus_follows_mouse`
+- `only_active_workspace`
+- `only_active_monitor`
+- `show_special`
 
 约束：
 
-- 这些配置项当前只控制布局算法
-- overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
+- 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
+- `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
+- `overview_focus_follows_mouse` 只控制 overview 内部选中项是否跟随鼠标，以及退出 overview 时是否提交当前选中窗口；它不要求 overview 打开期间持续改真实 focus
+- 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
+- `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
+- 除 `overview_focus_follows_mouse` 外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
 
 ## 9. 验收标准

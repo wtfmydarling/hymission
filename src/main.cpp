@@ -9,12 +9,12 @@ inline HANDLE g_pluginHandle = nullptr;
 inline std::unique_ptr<hymission::OverviewController> g_overviewController;
 
 namespace {
-SDispatchResult dispatchToggle(const std::string&) {
-    return g_overviewController ? g_overviewController->toggle() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+SDispatchResult dispatchToggle(const std::string& args) {
+    return g_overviewController ? g_overviewController->toggle(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
 
-SDispatchResult dispatchOpen(const std::string&) {
-    return g_overviewController ? g_overviewController->open() : SDispatchResult{.success = false, .error = "overview controller unavailable"};
+SDispatchResult dispatchOpen(const std::string& args) {
+    return g_overviewController ? g_overviewController->open(args) : SDispatchResult{.success = false, .error = "overview controller unavailable"};
 }
 
 SDispatchResult dispatchClose(const std::string&) {
@@ -35,6 +35,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 #define CONF(name, value) HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:" name, {value})
     CONF("outer_padding", 48L);
+    CONF("outer_padding_top", 48L);
+    CONF("outer_padding_right", 48L);
+    CONF("outer_padding_bottom", 48L);
+    CONF("outer_padding_left", 48L);
     CONF("row_spacing", 32L);
     CONF("column_spacing", 32L);
     CONF("min_window_length", 120L);
@@ -44,6 +48,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("layout_scale_weight", 1.0F);
     CONF("layout_space_weight", 0.10F);
     CONF("overview_focus_follows_mouse", 0L);
+    CONF("only_active_workspace", 0L);
+    CONF("only_active_monitor", 0L);
+    CONF("show_special", 0L);
+    CONF("debug_logs", 0L);
+    CONF("debug_surface_logs", 0L);
 #undef CONF
 
     g_overviewController = std::make_unique<hymission::OverviewController>(g_pluginHandle);
@@ -51,11 +60,20 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         HyprlandAPI::addNotification(g_pluginHandle, "[hymission] failed to initialize overview controller", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
     }
 
-    HyprlandAPI::addDispatcherV2(g_pluginHandle, "hymission:toggle", dispatchToggle);
-    HyprlandAPI::addDispatcherV2(g_pluginHandle, "hymission:open", dispatchOpen);
-    HyprlandAPI::addDispatcherV2(g_pluginHandle, "hymission:close", dispatchClose);
-    HyprlandAPI::addDispatcherV2(g_pluginHandle, "hymission:debug_current_layout", dispatchDebugCurrentLayout);
-    HyprlandAPI::reloadConfig();
+    const auto registerDispatcher = [&](const char* name, auto handler) {
+        if (!HyprlandAPI::addDispatcherV2(g_pluginHandle, name, handler)) {
+            HyprlandAPI::addNotification(g_pluginHandle, std::string("[hymission] failed to register dispatcher ") + name, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        }
+    };
+
+    registerDispatcher("hymission:toggle", dispatchToggle);
+    registerDispatcher("hymission:open", dispatchOpen);
+    registerDispatcher("hymission:close", dispatchClose);
+    registerDispatcher("hymission:debug_current_layout", dispatchDebugCurrentLayout);
+
+    if (!HyprlandAPI::reloadConfig()) {
+        HyprlandAPI::addNotification(g_pluginHandle, "[hymission] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+    }
 
     return {
         .name = "hymission",

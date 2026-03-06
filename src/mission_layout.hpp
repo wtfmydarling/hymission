@@ -35,7 +35,10 @@ struct WindowSlot {
 };
 
 struct LayoutConfig {
-    double outerPadding = 48.0;
+    double outerPaddingTop = 48.0;
+    double outerPaddingRight = 48.0;
+    double outerPaddingBottom = 48.0;
+    double outerPaddingLeft = 48.0;
     double rowSpacing = 32.0;
     double columnSpacing = 32.0;
     double smallWindowBoost = 1.35;
@@ -44,6 +47,7 @@ struct LayoutConfig {
     double layoutSpaceWeight = 0.10;
     double layoutScaleWeight = 1.0;
     double minSlotScale = 0.10;
+    bool   preserveInputOrder = false;
 };
 
 class MissionControlLayout {

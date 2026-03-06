@@ -12,6 +12,7 @@
 - [`docs/spec.md`](docs/spec.md)
 - [`docs/architecture.md`](docs/architecture.md)
 - [`docs/research.md`](docs/research.md)
+- [`docs/todo.md`](docs/todo.md)
 
 ## 当前状态
 
@@ -20,6 +21,9 @@
 - `MissionControlLayout::compute(...)`，输入窗口自然几何，输出 overview 目标预览几何
 - overview 状态机与最小 opening/closing 动画
 - overview preview 渲染、backdrop、hover/selected 高亮
+- preview 对屏幕外窗口、Wayland/Xwayland 缩放和 pinned 浮窗的基础支持
+- scope-aware overview 收集：支持按当前 workspace、按配置默认范围或 `forceall` 跨 monitor / 跨 workspace 收集
+- overview 打开后的同窗口集重建会尽量保持 preview slot 顺序稳定，避免 scrolling focus 波动把 preview 洗牌
 - 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
 - dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
 - 一组 overview / 布局配置项
@@ -49,18 +53,26 @@ README 只描述仓库现状和最小使用方式；行为定义以 [`docs/spec.
 bind = SUPER, TAB, hymission:toggle
 bind = SUPER SHIFT, TAB, hymission:open
 bind = SUPER CTRL, TAB, hymission:close
+bind = SUPER, C, hymission:toggle,onlycurrentworkspace
+bind = SUPER, A, hymission:toggle,forceall
 bind = SUPER, M, hymission:debug_current_layout
 ```
 
-- `hymission:toggle`: 打开或关闭当前 monitor / 当前 workspace 的 overview
-- `hymission:open`: 打开 overview
+- `hymission:toggle`: 打开或关闭 overview；支持可选参数 `onlycurrentworkspace` 和 `forceall`
+- `hymission:open`: 打开 overview；支持可选参数 `onlycurrentworkspace` 和 `forceall`
 - `hymission:close`: 关闭 overview
-- `hymission:debug_current_layout`: 只计算当前 preview slots，并用通知显示摘要，不进入 overview
+- `hymission:debug_current_layout`: 按默认 scope 只计算当前 preview slots，并用通知显示摘要，不进入 overview
+
+scope 参数语义：
+
+- 无参数：走配置驱动的默认收集范围
+- `onlycurrentworkspace`：只收集光标所在 monitor 的当前普通 workspace，不纳入 special workspace
+- `forceall`：跨所有 monitor 收集所有普通 workspace，并额外纳入当前可见的 special workspace 窗口
 
 `debug_current_layout` 会：
 
-- 取光标所在显示器
-- 收集该显示器当前活动工作区中的可见窗口
+- 取光标所在显示器作为 anchor monitor
+- 按默认配置收集 overview 参与窗口，以及参与 monitor 上可见的 pinned 浮窗
 - 计算 Mission Control 风格 preview slots
 - 用通知显示摘要结果
 
@@ -71,7 +83,10 @@ bind = SUPER, M, hymission:debug_current_layout
 ```conf
 plugin {
     hymission {
-        outer_padding = 48
+        outer_padding_top = 48
+        outer_padding_right = 48
+        outer_padding_bottom = 48
+        outer_padding_left = 48
         row_spacing = 32
         column_spacing = 32
         min_window_length = 120
@@ -81,13 +96,19 @@ plugin {
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
         overview_focus_follows_mouse = 0
+        only_active_workspace = 0
+        only_active_monitor = 0
+        show_special = 0
     }
 }
 ```
 
 语义摘要：
 
-- `outer_padding`: overview 内容与显示器边缘的内边距
+- `outer_padding_top`: overview 内容到显示器上边缘的内边距
+- `outer_padding_right`: overview 内容到显示器右边缘的内边距
+- `outer_padding_bottom`: overview 内容到显示器下边缘的内边距
+- `outer_padding_left`: overview 内容到显示器左边缘的内边距
 - `row_spacing`: preview 行间距
 - `column_spacing`: preview 列间距
 - `min_window_length`: 小窗口参与布局前的最小边长钳制
@@ -96,9 +117,24 @@ plugin {
 - `min_slot_scale`: 布局最小缩放下限
 - `layout_scale_weight`: 行数候选评分中对缩放大小的权重
 - `layout_space_weight`: 行数候选评分中对空间利用率的权重
-- `overview_focus_follows_mouse`: overview 期间是否让 hover 的 preview 成为当前 focus，并在退出时保留最后一次 hover focus
+- `overview_focus_follows_mouse`: 是否让 overview 内部当前选中项跟随鼠标 hover；开启后退出 overview 会提交到当前选中的 preview，但 overview 打开期间不会持续改真实窗口 focus。对 scrolling 工作区，退出动画会先等待真实布局收敛到目标 focus，再朝该最终位置收尾
+- `only_active_workspace`: 默认 scope 下是否只纳入参与 monitor 的当前活动普通 workspace
+- `only_active_monitor`: 默认 scope 下是否只纳入光标所在 monitor
+- `show_special`: 默认 scope 下是否额外纳入参与 monitor 上当前可见的 special workspace 窗口
 
-示例：开启 overview 期间 focus 跟随鼠标
+兼容性说明：
+
+- 旧配置 `outer_padding` 仍然保留，作为四个方向 padding 的统一回退值
+- 如果设置了 `outer_padding_top/right/bottom/left`，则对应方向会覆盖 `outer_padding`
+- `onlycurrentworkspace` 和 `forceall` dispatcher 参数会覆盖默认 scope 配置
+
+当前 runtime 还会临时接管两项现有 Hyprland 行为：
+
+- overview 激活时会暂时关闭全局 `input:follow_mouse`，避免光标移动时 Hyprland 的真实窗口 focus 被动变化；overview 关闭后恢复原值
+- scrolling 工作区下会暂时关闭 `scrolling:follow_focus`，避免 layout 自己跟着真实 focus 跳动；overview 关闭后恢复原值
+- 如果退出 overview 时目标窗口已经在当前显示器上有可见区域，插件会把光标挪到该可见区域中心；如果目标窗口在 scrolling 下仍然不在屏内，则会临时保持该窗口为真实 focus，直到下一次真实鼠标事件
+
+示例：开启 overview 内部选中项跟随鼠标，并在退出 overview 时提交到当前选中窗口
 
 ```conf
 plugin {
@@ -164,6 +200,11 @@ meson compile -C build-meson
 3. 绑定 `hymission:toggle` 和 `hymission:debug_current_layout`
 4. 先触发 `hymission:debug_current_layout`，确认通知里能看到 preview 数量和前几个目标矩形
 5. 再触发 `hymission:toggle`，确认 overview 能正常打开、关闭和选窗
+
+额外回归建议：
+
+- 当前 monitor 上有 pinned 浮窗时，切换 workspace 后进入 overview，确认 pinned 浮窗仍在 overview 中
+- 打开 overview 后用触控板 workspace swipe 切换工作区，确认手势能正常触发，且 workspace 变化后 overview 会退出
 
 如果只想验证布局算法而不启动 Hyprland 插件，可以直接运行：
 
