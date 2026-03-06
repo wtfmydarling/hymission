@@ -86,8 +86,8 @@ class OverviewController {
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         installHooks();
-    [[nodiscard]] bool         hookFunction(const std::string& needle, CFunctionHook*& hook, void* destination);
-    [[nodiscard]] void*        findFunction(const std::string& needle) const;
+    [[nodiscard]] bool         hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination);
+    [[nodiscard]] void*        findFunction(const std::string& symbolName, const std::string& demangledNeedle) const;
 
     [[nodiscard]] bool         isAnimating() const;
     [[nodiscard]] bool         isVisible() const;

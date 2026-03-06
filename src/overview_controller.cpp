@@ -398,20 +398,20 @@ bool OverviewController::focusFollowsMouseEnabled() const {
 }
 
 bool OverviewController::installHooks() {
-    if (!hookFunction("CHyprRenderer::renderWindow(", m_renderWindowHook, reinterpret_cast<void*>(&hkRenderWindow))) {
+    if (!hookFunction("renderWindow", "CHyprRenderer::renderWindow(", m_renderWindowHook, reinterpret_cast<void*>(&hkRenderWindow))) {
         notify("[hymission] failed to hook renderWindow", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
     m_renderWindowOriginal = reinterpret_cast<RenderWindowFn>(m_renderWindowHook->m_original);
 
-    if (!hookFunction("CHyprRenderer::renderWorkspaceWindowsFullscreen(", m_renderWorkspaceWindowsFullscreenHook,
+    if (!hookFunction("renderWorkspaceWindowsFullscreen", "CHyprRenderer::renderWorkspaceWindowsFullscreen(", m_renderWorkspaceWindowsFullscreenHook,
                       reinterpret_cast<void*>(&hkRenderWorkspaceWindowsFullscreen))) {
         notify("[hymission] failed to hook fullscreen workspace renderer", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
-    auto* renderWorkspaceWindows = findFunction("CHyprRenderer::renderWorkspaceWindows(");
+    auto* renderWorkspaceWindows = findFunction("renderWorkspaceWindows", "CHyprRenderer::renderWorkspaceWindows(");
     if (!renderWorkspaceWindows) {
         notify("[hymission] failed to find renderWorkspaceWindows", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
@@ -419,13 +419,21 @@ bool OverviewController::installHooks() {
 
     m_renderWorkspaceWindowsOriginal = reinterpret_cast<RenderWorkspaceWindowsFn>(renderWorkspaceWindows);
 
-    m_renderWindowHook->hook();
-    m_renderWorkspaceWindowsFullscreenHook->hook();
+    if (!m_renderWindowHook->hook()) {
+        notify("[hymission] renderWindow hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
+    if (!m_renderWorkspaceWindowsFullscreenHook->hook()) {
+        notify("[hymission] fullscreen workspace hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
     return true;
 }
 
-bool OverviewController::hookFunction(const std::string& needle, CFunctionHook*& hook, void* destination) {
-    void* source = findFunction(needle);
+bool OverviewController::hookFunction(const std::string& symbolName, const std::string& demangledNeedle, CFunctionHook*& hook, void* destination) {
+    void* source = findFunction(symbolName, demangledNeedle);
     if (!source)
         return false;
 
@@ -433,10 +441,10 @@ bool OverviewController::hookFunction(const std::string& needle, CFunctionHook*&
     return hook != nullptr;
 }
 
-void* OverviewController::findFunction(const std::string& needle) const {
-    const auto matches = HyprlandAPI::findFunctionsByName(m_handle, needle);
+void* OverviewController::findFunction(const std::string& symbolName, const std::string& demangledNeedle) const {
+    const auto matches = HyprlandAPI::findFunctionsByName(m_handle, symbolName);
     const auto it = std::find_if(matches.begin(), matches.end(), [&](const SFunctionMatch& match) {
-        return match.demangled.find(needle) != std::string::npos;
+        return match.demangled.find(demangledNeedle) != std::string::npos;
     });
 
     if (it != matches.end())
