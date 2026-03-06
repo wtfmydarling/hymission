@@ -99,6 +99,7 @@ class OverviewController {
     [[nodiscard]] bool         hasManagedWindow(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldAutoCloseFor(const PHLWINDOW& window) const;
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
+    [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;

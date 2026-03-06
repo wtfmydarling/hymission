@@ -179,7 +179,7 @@ SDispatchResult OverviewController::debugCurrentLayout() const {
 
     const State preview = buildState(monitor);
     if (preview.windows.empty()) {
-        notify("[hymission] no visible windows on current workspace", CHyprColor(1.0, 0.7, 0.2, 1.0), 2500);
+        notify(collectionSummary(monitor), CHyprColor(1.0, 0.7, 0.2, 1.0), 5000);
         return {};
     }
 
@@ -531,6 +531,79 @@ bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const PHLMO
     return size.x >= 1.0 && size.y >= 1.0;
 }
 
+std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) const {
+    std::size_t total = 0;
+    std::size_t accepted = 0;
+    std::size_t noWorkspace = 0;
+    std::size_t specialWorkspace = 0;
+    std::size_t unmapped = 0;
+    std::size_t hidden = 0;
+    std::size_t fading = 0;
+    std::size_t desktop = 0;
+    std::size_t workspaceMismatch = 0;
+    std::size_t invalidSize = 0;
+
+    for (const auto& window : g_pCompositor->m_windows) {
+        if (!window)
+            continue;
+
+        ++total;
+
+        if (!window->m_workspace) {
+            ++noWorkspace;
+            continue;
+        }
+
+        if (window->m_workspace->m_isSpecialWorkspace) {
+            ++specialWorkspace;
+            continue;
+        }
+
+        if (!window->m_isMapped) {
+            ++unmapped;
+            continue;
+        }
+
+        if (window->isHidden()) {
+            ++hidden;
+            continue;
+        }
+
+        if (window->m_fadingOut) {
+            ++fading;
+            continue;
+        }
+
+        if (window->desktopComponent()) {
+            ++desktop;
+            continue;
+        }
+
+        if (!monitor || !monitor->m_activeWorkspace || window->m_workspace != monitor->m_activeWorkspace) {
+            ++workspaceMismatch;
+            continue;
+        }
+
+        const auto size = window->m_realSize->value();
+        if (size.x < 1.0 || size.y < 1.0) {
+            ++invalidSize;
+            continue;
+        }
+
+        ++accepted;
+    }
+
+    std::ostringstream summary;
+    summary << "[hymission] collect mon=" << (monitor ? monitor->m_name : "?") << " ws="
+            << ((monitor && monitor->m_activeWorkspace) ? monitor->m_activeWorkspace->m_name : "?") << " total=" << total << " ok=" << accepted
+            << " mismatch=" << workspaceMismatch << " hidden=" << hidden << " unmapped=" << unmapped << " special=" << specialWorkspace;
+
+    if (fading || desktop || invalidSize || noWorkspace)
+        summary << " fade=" << fading << " deco=" << desktop << " size=" << invalidSize << " nows=" << noWorkspace;
+
+    return summary.str();
+}
+
 std::vector<Rect> OverviewController::targetRects() const {
     std::vector<Rect> rects;
     rects.reserve(m_state.windows.size());
@@ -567,7 +640,7 @@ double OverviewController::visualProgress() const {
 void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     State next = buildState(monitor);
     if (next.windows.empty()) {
-        notify("[hymission] no visible windows on current workspace", CHyprColor(1.0, 0.7, 0.2, 1.0), 2500);
+        notify(collectionSummary(monitor), CHyprColor(1.0, 0.7, 0.2, 1.0), 5000);
         return;
     }
 
