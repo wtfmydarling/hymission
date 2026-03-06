@@ -304,6 +304,7 @@ void OverviewController::handleTick() {
     updateFocusPolicy();
 
     if (m_state.ownerMonitor) {
+        g_pHyprRenderer->damageMonitor(m_state.ownerMonitor);
         g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
     }
 }
@@ -354,9 +355,12 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
     const Rect current = currentPreviewRect(*it);
     const Vector2D renderedPos = renderedWindowPosition(window);
     const Vector2D monitorPos = monitor->m_position;
-    const Rect actual = makeRect(renderedPos.x - monitorPos.x, renderedPos.y - monitorPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
-    const Rect target = makeRect(current.x - monitorPos.x, current.y - monitorPos.y, current.width, current.height);
-    const double scale = std::clamp(current.width / std::max(1.0, actual.width), 0.05, 10.0);
+    const double   monitorScale = monitor->m_scale;
+    const Rect actual = makeRect((renderedPos.x - monitorPos.x) * monitorScale, (renderedPos.y - monitorPos.y) * monitorScale, window->m_realSize->value().x * monitorScale,
+                                 window->m_realSize->value().y * monitorScale);
+    const Rect target =
+        makeRect((current.x - monitorPos.x) * monitorScale, (current.y - monitorPos.y) * monitorScale, current.width * monitorScale, current.height * monitorScale);
+    const double scale = std::clamp(target.width / std::max(1.0, actual.width), 0.05, 10.0);
     const Vector2D translation = {
         target.x - actual.x * scale,
         target.y - actual.y * scale,
