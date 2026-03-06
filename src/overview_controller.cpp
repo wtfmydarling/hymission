@@ -83,6 +83,18 @@ CBox toBox(const Rect& rect) {
     };
 }
 
+Vector2D renderedWindowPosition(const PHLWINDOW& window) {
+    if (!window)
+        return {};
+
+    Vector2D position = window->m_realPosition->value();
+    if (window->m_workspace && !window->m_pinned)
+        position += window->m_workspace->m_renderOffset->value();
+
+    position += window->m_floatingOffset;
+    return position;
+}
+
 void hkRenderWindow(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
                     bool standalone) {
     if (g_controller) {
@@ -360,11 +372,12 @@ void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW windo
     }
 
     const Rect current = currentPreviewRect(*it);
-    const Rect natural = it->naturalGlobal;
-    const double scale = std::clamp(current.width / std::max(1.0, natural.width), 0.05, 10.0);
+    const Vector2D renderedPos = renderedWindowPosition(window);
+    const Rect actual = makeRect(renderedPos.x, renderedPos.y, window->m_realSize->value().x, window->m_realSize->value().y);
+    const double scale = std::clamp(current.width / std::max(1.0, actual.width), 0.05, 10.0);
     const Vector2D translation = {
-        current.x - natural.x * scale,
-        current.y - natural.y * scale,
+        current.x - actual.x * scale,
+        current.y - actual.y * scale,
     };
 
     auto& renderModif = g_pHyprOpenGL->m_renderData.renderModif;
@@ -940,18 +953,19 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .index = state.windows.size(),
             .natural =
                 {
-                    window->m_realPosition->value().x - monitor->m_position.x,
-                    window->m_realPosition->value().y - monitor->m_position.y,
+                    renderedWindowPosition(window).x - monitor->m_position.x,
+                    renderedWindowPosition(window).y - monitor->m_position.y,
                     std::max(1.0, window->m_realSize->value().x),
                     std::max(1.0, window->m_realSize->value().y),
                 },
             .label = window->m_title,
         });
 
+        const auto renderedPos = renderedWindowPosition(window);
         state.windows.push_back({
             .window = window,
             .title = window->m_title,
-            .naturalGlobal = makeRect(window->m_realPosition->value().x, window->m_realPosition->value().y, window->m_realSize->value().x, window->m_realSize->value().y),
+            .naturalGlobal = makeRect(renderedPos.x, renderedPos.y, window->m_realSize->value().x, window->m_realSize->value().y),
             .isFloating = window->m_isFloating,
             .isPinned = window->m_pinned,
         });
