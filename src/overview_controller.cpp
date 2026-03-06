@@ -518,7 +518,10 @@ bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const PHLMO
     if (!window || !monitor || !monitor->m_activeWorkspace)
         return false;
 
-    if (!window->m_isMapped || !window->visible() || window->desktopComponent())
+    if (!window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
+        return false;
+
+    if (!window->m_isMapped || window->isHidden() || window->m_fadingOut || window->desktopComponent())
         return false;
 
     if (window->m_workspace != monitor->m_activeWorkspace)
