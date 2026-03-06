@@ -521,7 +521,7 @@ bool OverviewController::shouldManageWindow(const PHLWINDOW& window, const PHLMO
     if (!window->m_workspace || window->m_workspace->m_isSpecialWorkspace)
         return false;
 
-    if (!window->m_isMapped || window->isHidden() || window->m_fadingOut || window->desktopComponent())
+    if (!window->m_isMapped || window->isHidden() || window->m_fadingOut)
         return false;
 
     if (window->m_workspace != monitor->m_activeWorkspace)
@@ -539,7 +539,6 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
     std::size_t unmapped = 0;
     std::size_t hidden = 0;
     std::size_t fading = 0;
-    std::size_t desktop = 0;
     std::size_t workspaceMismatch = 0;
     std::size_t invalidSize = 0;
 
@@ -574,11 +573,6 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
             continue;
         }
 
-        if (window->desktopComponent()) {
-            ++desktop;
-            continue;
-        }
-
         if (!monitor || !monitor->m_activeWorkspace || window->m_workspace != monitor->m_activeWorkspace) {
             ++workspaceMismatch;
             continue;
@@ -598,8 +592,8 @@ std::string OverviewController::collectionSummary(const PHLMONITOR& monitor) con
             << ((monitor && monitor->m_activeWorkspace) ? monitor->m_activeWorkspace->m_name : "?") << " total=" << total << " ok=" << accepted
             << " mismatch=" << workspaceMismatch << " hidden=" << hidden << " unmapped=" << unmapped << " special=" << specialWorkspace;
 
-    if (fading || desktop || invalidSize || noWorkspace)
-        summary << " fade=" << fading << " deco=" << desktop << " size=" << invalidSize << " nows=" << noWorkspace;
+    if (fading || invalidSize || noWorkspace)
+        summary << " fade=" << fading << " size=" << invalidSize << " nows=" << noWorkspace;
 
     return summary.str();
 }
