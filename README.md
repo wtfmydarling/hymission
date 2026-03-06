@@ -18,17 +18,15 @@
 已经实现：
 
 - `MissionControlLayout::compute(...)`，输入窗口自然几何，输出 overview 目标预览几何
-- `hymission:debug_current_layout` dispatcher
-- 一组当前仅用于布局引擎的配置项
+- overview 状态机与最小 opening/closing 动画
+- overview preview 渲染、backdrop、hover/selected 高亮
+- 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
+- dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
+- 一组 overview / 布局配置项
 - 独立 demo 程序 `hymission-layout-demo`
 
 尚未实现：
 
-- 真实 overview 打开/关闭
-- preview 渲染
-- 鼠标命中测试与点击激活
-- 键盘导航
-- 动画过渡
 - 多 workspace overview 条带
 - 拖拽、搜索、窗口分组
 
@@ -45,20 +43,26 @@ README 只描述仓库现状和最小使用方式；行为定义以 [`docs/spec.
 
 ### Dispatcher
 
-目前只有一个调试用 dispatcher：
+当前支持以下 dispatcher：
 
 ```conf
+bind = SUPER, TAB, hymission:toggle
+bind = SUPER SHIFT, TAB, hymission:open
+bind = SUPER CTRL, TAB, hymission:close
 bind = SUPER, M, hymission:debug_current_layout
 ```
 
-执行后会：
+- `hymission:toggle`: 打开或关闭当前 monitor / 当前 workspace 的 overview
+- `hymission:open`: 打开 overview
+- `hymission:close`: 关闭 overview
+- `hymission:debug_current_layout`: 只计算当前 preview slots，并用通知显示摘要，不进入 overview
+
+`debug_current_layout` 会：
 
 - 取光标所在显示器
 - 收集该显示器当前活动工作区中的可见窗口
 - 计算 Mission Control 风格 preview slots
 - 用通知显示摘要结果
-
-当前没有 `toggle/open/close` overview dispatcher；这些接口只在规格文档中作为未来预留命名。
 
 ### 当前配置项
 
@@ -157,8 +161,9 @@ meson compile -C build-meson
 
 1. 编译插件
 2. 在 `hyprland.conf` 中加载 `libhymission.so`
-3. 绑定 `hymission:debug_current_layout`
-4. 触发 dispatcher，确认通知里能看到 preview 数量和前几个目标矩形
+3. 绑定 `hymission:toggle` 和 `hymission:debug_current_layout`
+4. 先触发 `hymission:debug_current_layout`，确认通知里能看到 preview 数量和前几个目标矩形
+5. 再触发 `hymission:toggle`，确认 overview 能正常打开、关闭和选窗
 
 如果只想验证布局算法而不启动 Hyprland 插件，可以直接运行：
 
