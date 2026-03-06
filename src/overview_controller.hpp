@@ -52,6 +52,7 @@ class OverviewController {
 
     void renderWindowHook(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
                           bool standalone);
+    void renderWorkspaceWindowsHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
     void renderWorkspaceWindowsFullscreenHook(void* rendererThisptr, PHLMONITOR monitor, PHLWORKSPACE workspace, const Time::steady_tp& now);
 
   private:
@@ -68,6 +69,8 @@ class OverviewController {
         Rect         naturalGlobal;
         Rect         targetGlobal;
         WindowSlot   slot;
+        bool         isFloating = false;
+        bool         isPinned = false;
     };
 
     struct State {
@@ -124,12 +127,14 @@ class OverviewController {
     void renderBackdrop() const;
     void renderSelectionChrome() const;
     void renderOutline(const Rect& rect, const CHyprColor& color, double thickness) const;
+    void renderManagedWorkspace(void* rendererThisptr, const PHLMONITOR& monitor, const PHLWORKSPACE& workspace, const Time::steady_tp& now);
 
     State  buildState(const PHLMONITOR& monitor) const;
     State  m_state;
     HANDLE m_handle = nullptr;
 
     CFunctionHook*            m_renderWindowHook = nullptr;
+    CFunctionHook*            m_renderWorkspaceWindowsHook = nullptr;
     CFunctionHook*            m_renderWorkspaceWindowsFullscreenHook = nullptr;
     RenderWindowFn            m_renderWindowOriginal = nullptr;
     RenderWorkspaceWindowsFn  m_renderWorkspaceWindowsOriginal = nullptr;
