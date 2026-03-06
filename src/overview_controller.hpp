@@ -20,6 +20,7 @@
 #include <hyprland/src/plugins/HookSystem.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/pass/SurfacePassElement.hpp>
 
 #include "mission_layout.hpp"
 #include "overview_logic.hpp"
@@ -49,9 +50,10 @@ class OverviewController {
     void handleWindowSetChange(PHLWINDOW window);
     void handleWorkspaceChange();
     void handleMonitorChange(PHLMONITOR monitor);
-
-    void renderWindowHook(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
-                          bool standalone);
+    CBox                   surfaceTexBoxHook(void* surfacePassThisptr);
+    std::optional<CBox>    surfaceBoundingBoxHook(void* surfacePassThisptr);
+    CRegion                surfaceOpaqueRegionHook(void* surfacePassThisptr);
+    CRegion                surfaceVisibleRegionHook(void* surfacePassThisptr, bool& cancel);
   private:
     enum class Phase {
         Inactive,
@@ -84,7 +86,10 @@ class OverviewController {
         std::chrono::steady_clock::time_point  animationStart = {};
     };
 
-    using RenderWindowFn = void (*)(void*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, eRenderPassMode, bool, bool);
+    using SurfaceGetTexBoxFn = CBox (*)(void*);
+    using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
+    using SurfaceOpaqueRegionFn = CRegion (*)(void*);
+    using SurfaceVisibleRegionFn = CRegion (*)(void*, bool&);
     [[nodiscard]] LayoutConfig loadLayoutConfig() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
@@ -105,14 +110,18 @@ class OverviewController {
     [[nodiscard]] bool         shouldManageWindow(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] std::string  collectionSummary(const PHLMONITOR& monitor) const;
     [[nodiscard]] std::vector<Rect> targetRects() const;
+    [[nodiscard]] const ManagedWindow* managedWindowFor(const PHLWINDOW& window) const;
     [[nodiscard]] std::optional<std::size_t> hitTestTarget(double x, double y) const;
     [[nodiscard]] Rect         currentPreviewRect(const ManagedWindow& window) const;
     [[nodiscard]] double       visualProgress() const;
+    [[nodiscard]] bool         transformBoxForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, CBox& box, bool scaled) const;
+    [[nodiscard]] CRegion      transformRegionForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, const CRegion& region, bool scaled) const;
 
     void beginOpen(const PHLMONITOR& monitor);
     void beginClose();
     void deactivate();
     void refreshScene(const PHLMONITOR& monitor, const std::vector<ManagedWindow>& windows) const;
+    void damageOwnedMonitor() const;
     void updateAnimation();
     void updateFocusPolicy();
     void updateHoveredFromPointer();
@@ -126,11 +135,18 @@ class OverviewController {
     State  m_state;
     HANDLE m_handle = nullptr;
 
-    CFunctionHook*            m_renderWindowHook = nullptr;
-    RenderWindowFn            m_renderWindowOriginal = nullptr;
+    CFunctionHook*            m_surfaceTexBoxHook = nullptr;
+    CFunctionHook*            m_surfaceBoundingBoxHook = nullptr;
+    CFunctionHook*            m_surfaceOpaqueRegionHook = nullptr;
+    CFunctionHook*            m_surfaceVisibleRegionHook = nullptr;
+    SurfaceGetTexBoxFn        m_surfaceTexBoxOriginal = nullptr;
+    SurfaceBoundingBoxFn      m_surfaceBoundingBoxOriginal = nullptr;
+    SurfaceOpaqueRegionFn     m_surfaceOpaqueRegionOriginal = nullptr;
+    SurfaceVisibleRegionFn    m_surfaceVisibleRegionOriginal = nullptr;
     bool                      m_hooksActive = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
+    std::chrono::steady_clock::time_point m_lastAnimationFrameRequest = {};
 
     CHyprSignalListener       m_renderStageListener;
     CHyprSignalListener       m_mouseMoveListener;

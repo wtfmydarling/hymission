@@ -22,8 +22,8 @@
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
-#include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprutils/math/Region.hpp>
 
 #include "overview_logic.hpp"
 
@@ -38,6 +38,11 @@ constexpr double OUTLINE_THICKNESS = 4.0;
 constexpr double HOVER_THICKNESS = 2.0;
 constexpr double TITLE_PADDING = 12.0;
 OverviewController* g_controller = nullptr;
+
+struct SurfacePassElementMirror {
+    void*                             vtable = nullptr;
+    CSurfacePassElement::SRenderData  data;
+};
 
 long getConfigInt(HANDLE handle, const char* name, long fallback) {
     if (const auto* value = HyprlandAPI::getConfigValue(handle, name)) {
@@ -95,11 +100,39 @@ Vector2D renderedWindowPosition(const PHLWINDOW& window) {
     return position;
 }
 
-void hkRenderWindow(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode, bool ignorePosition,
-                    bool standalone) {
-    if (g_controller) {
-        g_controller->renderWindowHook(rendererThisptr, std::move(window), std::move(monitor), now, decorate, passMode, ignorePosition, standalone);
-    }
+const CSurfacePassElement::SRenderData* surfaceRenderData(void* surfacePassThisptr) {
+    if (!surfacePassThisptr)
+        return nullptr;
+
+    return &reinterpret_cast<SurfacePassElementMirror*>(surfacePassThisptr)->data;
+}
+
+CBox hkSurfaceTexBox(void* surfacePassThisptr) {
+    if (!g_controller)
+        return {};
+
+    return g_controller->surfaceTexBoxHook(surfacePassThisptr);
+}
+
+std::optional<CBox> hkSurfaceBoundingBox(void* surfacePassThisptr) {
+    if (!g_controller)
+        return {};
+
+    return g_controller->surfaceBoundingBoxHook(surfacePassThisptr);
+}
+
+CRegion hkSurfaceOpaqueRegion(void* surfacePassThisptr) {
+    if (!g_controller)
+        return {};
+
+    return g_controller->surfaceOpaqueRegionHook(surfacePassThisptr);
+}
+
+CRegion hkSurfaceVisibleRegion(void* surfacePassThisptr, bool& cancel) {
+    if (!g_controller)
+        return {};
+
+    return g_controller->surfaceVisibleRegionHook(surfacePassThisptr, cancel);
 }
 
 } // namespace
@@ -111,10 +144,14 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 OverviewController::~OverviewController() {
     deactivateHooks();
 
-    if (m_renderWindowHook) {
-        HyprlandAPI::removeFunctionHook(m_handle, m_renderWindowHook);
-        m_renderWindowHook = nullptr;
-    }
+    if (m_surfaceTexBoxHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceTexBoxHook);
+    if (m_surfaceBoundingBoxHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceBoundingBoxHook);
+    if (m_surfaceOpaqueRegionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceOpaqueRegionHook);
+    if (m_surfaceVisibleRegionHook)
+        HyprlandAPI::removeFunctionHook(m_handle, m_surfaceVisibleRegionHook);
 
     g_controller = nullptr;
 }
@@ -302,11 +339,16 @@ void OverviewController::handleTick() {
 
     updateAnimation();
     updateFocusPolicy();
+    if (!isAnimating())
+        return;
 
-    if (m_state.ownerMonitor) {
-        g_pHyprRenderer->damageMonitor(m_state.ownerMonitor);
-        g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
-    }
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastAnimationFrameRequest != std::chrono::steady_clock::time_point{} &&
+        now - m_lastAnimationFrameRequest < std::chrono::milliseconds(14))
+        return;
+
+    m_lastAnimationFrameRequest = now;
+    damageOwnedMonitor();
 }
 
 void OverviewController::handleWindowSetChange(PHLWINDOW window) {
@@ -333,52 +375,78 @@ void OverviewController::handleMonitorChange(PHLMONITOR monitor) {
         beginClose();
 }
 
-void OverviewController::renderWindowHook(void* rendererThisptr, PHLWINDOW window, PHLMONITOR monitor, const Time::steady_tp& now, bool decorate, eRenderPassMode passMode,
-                                          bool ignorePosition, bool standalone) {
-    if (!m_renderWindowOriginal)
-        return;
+CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
+    if (!m_surfaceTexBoxOriginal)
+        return {};
 
-    if (!window || !monitor || !isVisible() || !ownsMonitor(monitor) || !hasManagedWindow(window)) {
-        m_renderWindowOriginal(rendererThisptr, std::move(window), std::move(monitor), now, decorate, passMode, ignorePosition, standalone);
-        return;
-    }
+    CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
 
-    if (passMode == RENDER_PASS_POPUP)
-        return;
+    const auto* renderData = surfaceRenderData(surfacePassThisptr);
+    if (!renderData || !renderData->pWindow || renderData->popup)
+        return box;
 
-    const auto it = std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == window; });
-    if (it == m_state.windows.end()) {
-        m_renderWindowOriginal(rendererThisptr, std::move(window), std::move(monitor), now, decorate, passMode, ignorePosition, standalone);
-        return;
-    }
+    const auto monitor = renderData->pMonitor.lock();
+    if (!monitor)
+        return box;
 
-    const Rect current = currentPreviewRect(*it);
-    const Vector2D renderedPos = renderedWindowPosition(window);
-    const Vector2D monitorPos = monitor->m_position;
-    const double   monitorScale = monitor->m_scale;
-    const Rect actual = makeRect((renderedPos.x - monitorPos.x) * monitorScale, (renderedPos.y - monitorPos.y) * monitorScale, window->m_realSize->value().x * monitorScale,
-                                 window->m_realSize->value().y * monitorScale);
-    const Rect target =
-        makeRect((current.x - monitorPos.x) * monitorScale, (current.y - monitorPos.y) * monitorScale, current.width * monitorScale, current.height * monitorScale);
-    const double scale = std::clamp(target.width / std::max(1.0, actual.width), 0.05, 10.0);
-    const Vector2D translation = {
-        target.x - actual.x * scale,
-        target.y - actual.y * scale,
-    };
+    (void)transformBoxForWindow(renderData->pWindow, monitor, box, false);
+    return box;
+}
 
-    SRenderModifData renderModif;
-    if (std::abs(scale - 1.0) > 0.0001)
-        renderModif.modifs.emplace_back(SRenderModifData::RMOD_TYPE_SCALE, scale);
-    if (translation != Vector2D{})
-        renderModif.modifs.emplace_back(SRenderModifData::RMOD_TYPE_TRANSLATE, translation);
+std::optional<CBox> OverviewController::surfaceBoundingBoxHook(void* surfacePassThisptr) {
+    if (!m_surfaceBoundingBoxOriginal)
+        return {};
 
-    if (!renderModif.modifs.empty())
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{renderModif}));
+    auto box = m_surfaceBoundingBoxOriginal(surfacePassThisptr);
+    if (!box.has_value())
+        return box;
 
-    m_renderWindowOriginal(rendererThisptr, std::move(window), std::move(monitor), now, decorate, passMode, ignorePosition, standalone);
+    const auto* renderData = surfaceRenderData(surfacePassThisptr);
+    if (!renderData || !renderData->pWindow || renderData->popup)
+        return box;
 
-    if (!renderModif.modifs.empty())
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{SRenderModifData{}}));
+    const auto monitor = renderData->pMonitor.lock();
+    if (!monitor)
+        return box;
+
+    (void)transformBoxForWindow(renderData->pWindow, monitor, *box, false);
+    return box;
+}
+
+CRegion OverviewController::surfaceOpaqueRegionHook(void* surfacePassThisptr) {
+    if (!m_surfaceOpaqueRegionOriginal)
+        return {};
+
+    CRegion region = m_surfaceOpaqueRegionOriginal(surfacePassThisptr);
+
+    const auto* renderData = surfaceRenderData(surfacePassThisptr);
+    if (!renderData || !renderData->pWindow || renderData->popup)
+        return region;
+
+    const auto monitor = renderData->pMonitor.lock();
+    if (!monitor)
+        return region;
+
+    return transformRegionForWindow(renderData->pWindow, monitor, region, false);
+}
+
+CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, bool& cancel) {
+    if (!m_surfaceVisibleRegionOriginal)
+        return {};
+
+    CRegion region = m_surfaceVisibleRegionOriginal(surfacePassThisptr, cancel);
+    if (cancel)
+        return region;
+
+    const auto* renderData = surfaceRenderData(surfacePassThisptr);
+    if (!renderData || !renderData->pWindow || renderData->popup)
+        return region;
+
+    const auto monitor = renderData->pMonitor.lock();
+    if (!monitor)
+        return region;
+
+    return transformRegionForWindow(renderData->pWindow, monitor, region, true);
 }
 
 LayoutConfig OverviewController::loadLayoutConfig() const {
@@ -450,12 +518,30 @@ void OverviewController::setScrollingFollowFocusOverride(bool disable) {
 }
 
 bool OverviewController::installHooks() {
-    if (!hookFunction("renderWindow", "CHyprRenderer::renderWindow(", m_renderWindowHook, reinterpret_cast<void*>(&hkRenderWindow))) {
-        notify("[hymission] failed to hook renderWindow", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+    if (!hookFunction("getTexBox", "CSurfacePassElement::getTexBox(", m_surfaceTexBoxHook, reinterpret_cast<void*>(&hkSurfaceTexBox))) {
+        notify("[hymission] failed to hook getTexBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
         return false;
     }
 
-    m_renderWindowOriginal = nullptr;
+    if (!hookFunction("boundingBox", "CSurfacePassElement::boundingBox(", m_surfaceBoundingBoxHook, reinterpret_cast<void*>(&hkSurfaceBoundingBox))) {
+        notify("[hymission] failed to hook boundingBox", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
+    if (!hookFunction("opaqueRegion", "CSurfacePassElement::opaqueRegion(", m_surfaceOpaqueRegionHook, reinterpret_cast<void*>(&hkSurfaceOpaqueRegion))) {
+        notify("[hymission] failed to hook opaqueRegion", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
+    if (!hookFunction("visibleRegion", "CSurfacePassElement::visibleRegion(", m_surfaceVisibleRegionHook, reinterpret_cast<void*>(&hkSurfaceVisibleRegion))) {
+        notify("[hymission] failed to hook visibleRegion", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        return false;
+    }
+
+    m_surfaceTexBoxOriginal = nullptr;
+    m_surfaceBoundingBoxOriginal = nullptr;
+    m_surfaceOpaqueRegionOriginal = nullptr;
+    m_surfaceVisibleRegionOriginal = nullptr;
     return true;
 }
 
@@ -463,15 +549,27 @@ bool OverviewController::activateHooks() {
     if (m_hooksActive)
         return true;
 
-    if (!m_renderWindowHook)
+    if (!m_surfaceTexBoxHook || !m_surfaceBoundingBoxHook || !m_surfaceOpaqueRegionHook || !m_surfaceVisibleRegionHook)
         return false;
 
-    if (!m_renderWindowHook->hook()) {
-        notify("[hymission] renderWindow hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+    const bool hooked = m_surfaceTexBoxHook->hook() && m_surfaceBoundingBoxHook->hook() && m_surfaceOpaqueRegionHook->hook() && m_surfaceVisibleRegionHook->hook();
+    if (!hooked) {
+        notify("[hymission] surface pass hook attach failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
+        if (m_surfaceTexBoxHook)
+            m_surfaceTexBoxHook->unhook();
+        if (m_surfaceBoundingBoxHook)
+            m_surfaceBoundingBoxHook->unhook();
+        if (m_surfaceOpaqueRegionHook)
+            m_surfaceOpaqueRegionHook->unhook();
+        if (m_surfaceVisibleRegionHook)
+            m_surfaceVisibleRegionHook->unhook();
         return false;
     }
 
-    m_renderWindowOriginal = reinterpret_cast<RenderWindowFn>(m_renderWindowHook->m_original);
+    m_surfaceTexBoxOriginal = reinterpret_cast<SurfaceGetTexBoxFn>(m_surfaceTexBoxHook->m_original);
+    m_surfaceBoundingBoxOriginal = reinterpret_cast<SurfaceBoundingBoxFn>(m_surfaceBoundingBoxHook->m_original);
+    m_surfaceOpaqueRegionOriginal = reinterpret_cast<SurfaceOpaqueRegionFn>(m_surfaceOpaqueRegionHook->m_original);
+    m_surfaceVisibleRegionOriginal = reinterpret_cast<SurfaceVisibleRegionFn>(m_surfaceVisibleRegionHook->m_original);
     m_hooksActive = true;
     return true;
 }
@@ -480,10 +578,19 @@ void OverviewController::deactivateHooks() {
     if (!m_hooksActive)
         return;
 
-    if (m_renderWindowHook)
-        m_renderWindowHook->unhook();
+    if (m_surfaceTexBoxHook)
+        m_surfaceTexBoxHook->unhook();
+    if (m_surfaceBoundingBoxHook)
+        m_surfaceBoundingBoxHook->unhook();
+    if (m_surfaceOpaqueRegionHook)
+        m_surfaceOpaqueRegionHook->unhook();
+    if (m_surfaceVisibleRegionHook)
+        m_surfaceVisibleRegionHook->unhook();
 
-    m_renderWindowOriginal = nullptr;
+    m_surfaceTexBoxOriginal = nullptr;
+    m_surfaceBoundingBoxOriginal = nullptr;
+    m_surfaceOpaqueRegionOriginal = nullptr;
+    m_surfaceVisibleRegionOriginal = nullptr;
     m_hooksActive = false;
 }
 
@@ -636,6 +743,11 @@ std::vector<Rect> OverviewController::targetRects() const {
     return rects;
 }
 
+const OverviewController::ManagedWindow* OverviewController::managedWindowFor(const PHLWINDOW& window) const {
+    const auto it = std::find_if(m_state.windows.begin(), m_state.windows.end(), [&](const ManagedWindow& managed) { return managed.window == window; });
+    return it == m_state.windows.end() ? nullptr : &*it;
+}
+
 std::optional<std::size_t> OverviewController::hitTestTarget(double x, double y) const {
     return hitTest(targetRects(), x, y);
 }
@@ -659,6 +771,56 @@ double OverviewController::visualProgress() const {
     return 0.0;
 }
 
+bool OverviewController::transformBoxForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, CBox& box, bool scaled) const {
+    if (!window || !monitor || !isVisible() || !ownsMonitor(monitor))
+        return false;
+
+    const auto* managed = managedWindowFor(window);
+    if (!managed)
+        return false;
+
+    const Rect current = currentPreviewRect(*managed);
+    const double actualWidth = std::max(1.0, managed->naturalGlobal.width);
+    const double actualHeight = std::max(1.0, managed->naturalGlobal.height);
+    const double scaleX = current.width / actualWidth;
+    const double scaleY = current.height / actualHeight;
+    const double monitorScale = scaled ? monitor->m_scale : 1.0;
+
+    const Rect actual = makeRect((managed->naturalGlobal.x - monitor->m_position.x) * monitorScale,
+                                 (managed->naturalGlobal.y - monitor->m_position.y) * monitorScale,
+                                 managed->naturalGlobal.width * monitorScale,
+                                 managed->naturalGlobal.height * monitorScale);
+    const Rect target = makeRect((current.x - monitor->m_position.x) * monitorScale, (current.y - monitor->m_position.y) * monitorScale, current.width * monitorScale,
+                                 current.height * monitorScale);
+
+    box.x = target.x + (box.x - actual.x) * scaleX;
+    box.y = target.y + (box.y - actual.y) * scaleY;
+    box.width = std::max(1.0, box.width * scaleX);
+    box.height = std::max(1.0, box.height * scaleY);
+    return true;
+}
+
+CRegion OverviewController::transformRegionForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor, const CRegion& region, bool scaled) const {
+    CRegion transformed;
+    bool    changed = false;
+
+    region.forEachRect([&](const pixman_box32_t& rect) {
+        CBox box{
+            static_cast<double>(rect.x1),
+            static_cast<double>(rect.y1),
+            static_cast<double>(rect.x2 - rect.x1),
+            static_cast<double>(rect.y2 - rect.y1),
+        };
+
+        if (transformBoxForWindow(window, monitor, box, scaled))
+            changed = true;
+
+        transformed.add(box);
+    });
+
+    return changed ? transformed : region.copy();
+}
+
 void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     State next = buildState(monitor);
     if (next.windows.empty()) {
@@ -672,6 +834,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor) {
     next.phase = Phase::Opening;
     next.animationProgress = 0.0;
     next.animationStart = std::chrono::steady_clock::now();
+    m_lastAnimationFrameRequest = {};
     m_state = std::move(next);
     setScrollingFollowFocusOverride(true);
 
@@ -691,6 +854,7 @@ void OverviewController::deactivate() {
     const auto windows = m_state.windows;
     setScrollingFollowFocusOverride(false);
     deactivateHooks();
+    m_lastAnimationFrameRequest = {};
     m_state = {};
     refreshScene(monitor, windows);
 }
@@ -707,6 +871,14 @@ void OverviewController::refreshScene(const PHLMONITOR& monitor, const std::vect
     g_pHyprRenderer->damageMonitor(monitor);
     g_layoutManager->recalculateMonitor(monitor);
     g_pCompositor->scheduleFrameForMonitor(monitor);
+}
+
+void OverviewController::damageOwnedMonitor() const {
+    if (!m_state.ownerMonitor)
+        return;
+
+    g_pHyprRenderer->damageMonitor(m_state.ownerMonitor);
+    g_pCompositor->scheduleFrameForMonitor(m_state.ownerMonitor);
 }
 
 void OverviewController::updateAnimation() {
@@ -744,6 +916,9 @@ void OverviewController::updateHoveredFromPointer() {
         return;
 
     const Vector2D pointer = g_pInputManager->getMouseCoordsInternal();
+    const auto previousHovered = m_state.hoveredIndex;
+    const auto previousSelected = m_state.selectedIndex;
+
     m_state.hoveredIndex = hitTestTarget(pointer.x, pointer.y);
     if (m_state.hoveredIndex) {
         m_state.selectedIndex = m_state.hoveredIndex;
@@ -752,6 +927,9 @@ void OverviewController::updateHoveredFromPointer() {
             updateFocusPolicy();
         }
     }
+
+    if (previousHovered != m_state.hoveredIndex || previousSelected != m_state.selectedIndex)
+        damageOwnedMonitor();
 }
 
 void OverviewController::moveSelection(Direction direction) {
@@ -760,11 +938,15 @@ void OverviewController::moveSelection(Direction direction) {
 
     if (!m_state.selectedIndex) {
         m_state.selectedIndex = 0;
+        damageOwnedMonitor();
         return;
     }
 
     if (const auto next = chooseDirectionalNeighbor(targetRects(), *m_state.selectedIndex, direction)) {
+        if (*next == *m_state.selectedIndex)
+            return;
         m_state.selectedIndex = *next;
+        damageOwnedMonitor();
     }
 }
 
@@ -792,8 +974,8 @@ void OverviewController::renderBackdrop() const {
         CBox{
             m_state.ownerMonitor->m_position.x,
             m_state.ownerMonitor->m_position.y,
-            m_state.ownerMonitor->m_transformedSize.x,
-            m_state.ownerMonitor->m_transformedSize.y,
+            m_state.ownerMonitor->m_size.x,
+            m_state.ownerMonitor->m_size.y,
         },
         CHyprColor(0.05, 0.06, 0.08, alpha),
         {});
