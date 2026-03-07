@@ -48,9 +48,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("layout_scale_weight", 1.0F);
     CONF("layout_space_weight", 0.10F);
     CONF("overview_focus_follows_mouse", 0L);
+    CONF("gesture_invert_vertical", 0L);
+    CONF("one_workspace_per_row", 0L);
     CONF("only_active_workspace", 0L);
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
+    CONF("workspace_change_keeps_overview", 0L);
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);
 #undef CONF

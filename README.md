@@ -24,6 +24,7 @@
 - preview 对屏幕外窗口、Wayland/Xwayland 缩放和 pinned 浮窗的基础支持
 - scope-aware overview 收集：支持按当前 workspace、按配置默认范围或 `forceall` 跨 monitor / 跨 workspace 收集
 - overview 打开后的同窗口集重建会尽量保持 preview slot 顺序稳定，避免 scrolling focus 波动把 preview 洗牌
+- 官方 trackpad gesture 接入：可用 `dispatcher, hymission:toggle,...` 做跟手、可打断的 overview 开关
 - 鼠标命中测试、点击激活、方向键导航、`Esc` / `Return`
 - dispatcher：`hymission:toggle`、`hymission:open`、`hymission:close`、`hymission:debug_current_layout`
 - 一组 overview / 布局配置项
@@ -56,6 +57,8 @@ bind = SUPER CTRL, TAB, hymission:close
 bind = SUPER, C, hymission:toggle,onlycurrentworkspace
 bind = SUPER, A, hymission:toggle,forceall
 bind = SUPER, M, hymission:debug_current_layout
+
+gesture = 4, vertical, dispatcher, hymission:toggle,forceall
 ```
 
 - `hymission:toggle`: 打开或关闭 overview；支持可选参数 `onlycurrentworkspace` 和 `forceall`
@@ -68,6 +71,17 @@ scope 参数语义：
 - 无参数：走配置驱动的默认收集范围
 - `onlycurrentworkspace`：只收集光标所在 monitor 的当前普通 workspace，不纳入 special workspace
 - `forceall`：跨所有 monitor 收集所有普通 workspace，并额外纳入当前可见的 special workspace 窗口
+
+Gesture 说明：
+
+- 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...`
+- 推荐写法：`gesture = 4, vertical, dispatcher, hymission:toggle,forceall`
+- `vertical` 和 `horizontal` 都支持；`horizontal` 体感上等价于把左右映射成上下
+- `up` / `down` / `left` / `right` / 非官方简写不走插件接管
+- 默认语义是 state-aware：overview 关闭时上滑打开，overview 打开时下滑关闭
+- 如果手势开始方向和当前状态不匹配，例如 overview 关闭时直接下滑，则整个手势应 no-op
+- 松手采用 `50% + velocity` 提交规则；手指未抬起时可以直接反向拖回
+- 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则 Hyprland 原生 `gesture = ..., workspace` 会在 overview 内被接管为 monitor-local 的 overview-to-overview 滑动；中间帧只显示 overview 预览，不显示原生 workspace 切换动画
 
 `debug_current_layout` 会：
 
@@ -96,9 +110,12 @@ plugin {
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
         overview_focus_follows_mouse = 0
+        gesture_invert_vertical = 0
         only_active_workspace = 0
         only_active_monitor = 0
         show_special = 0
+        workspace_change_keeps_overview = 0
+        one_workspace_per_row = 0
     }
 }
 ```
@@ -118,9 +135,12 @@ plugin {
 - `layout_scale_weight`: 行数候选评分中对缩放大小的权重
 - `layout_space_weight`: 行数候选评分中对空间利用率的权重
 - `overview_focus_follows_mouse`: 是否让 overview 内部当前选中项跟随鼠标 hover；开启后退出 overview 会提交到当前选中的 preview，但 overview 打开期间不会持续改真实窗口 focus。对 scrolling 工作区，退出动画会先等待真实布局收敛到目标 focus，再朝该最终位置收尾
+- `gesture_invert_vertical`: 反转 vertical overview 手势方向；默认是 overview 关闭时上滑打开、overview 打开时下滑关闭
 - `only_active_workspace`: 默认 scope 下是否只纳入参与 monitor 的当前活动普通 workspace
 - `only_active_monitor`: 默认 scope 下是否只纳入光标所在 monitor
 - `show_special`: 默认 scope 下是否额外纳入参与 monitor 上当前可见的 special workspace 窗口
+- `workspace_change_keeps_overview`: 当前 overview scope 只展示活动 workspace 时，是否允许切 workspace 后继续留在 overview；开启后键盘、dispatcher 和原生 `gesture = ..., workspace` 都会走 overview-to-overview 过渡，关闭时切 workspace 会直接退出 overview
+- `one_workspace_per_row`: 布局解算时是否按 workspace 分行；开启后同一 monitor 上每个 workspace 占一整行，行顺序按 workspace 从上到下排列，行内仍尽量跟随真实窗口左右排布
 
 兼容性说明：
 
@@ -133,6 +153,8 @@ plugin {
 - overview 激活时会暂时关闭全局 `input:follow_mouse`，避免光标移动时 Hyprland 的真实窗口 focus 被动变化；overview 关闭后恢复原值
 - scrolling 工作区下会暂时关闭 `scrolling:follow_focus`，避免 layout 自己跟着真实 focus 跳动；overview 关闭后恢复原值
 - 如果退出 overview 时目标窗口已经在当前显示器上有可见区域，插件会把光标挪到该可见区域中心；如果目标窗口在 scrolling 下仍然不在屏内，则会临时保持该窗口为真实 focus，直到下一次真实鼠标事件
+- 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则键盘 / dispatcher / 原生 workspace swipe 切 workspace 后会在 overview 内直接滑到新 workspace；这一过渡会复用 Hyprland 原生 workspace swipe 的距离、反向、锁方向、速度阈值等配置，但会屏蔽原生普通窗口动画
+- 如果当前 overview scope 展示了多个 workspace，则 overview 内禁止切 workspace，并把参与 monitor 上活动 workspace 的名字临时改成 `Mission Control`；退出 overview 后恢复原名
 
 示例：开启 overview 内部选中项跟随鼠标，并在退出 overview 时提交到当前选中窗口
 
@@ -140,6 +162,27 @@ plugin {
 plugin {
     hymission {
         overview_focus_follows_mouse = 1
+    }
+}
+```
+
+示例：让 overview 在每个 monitor 上按 workspace 分行显示，workspace 自上而下排列
+
+```conf
+plugin {
+    hymission {
+        one_workspace_per_row = 1
+    }
+}
+```
+
+示例：只 overview 当前活动 workspace，并允许在 overview 内继续切 workspace
+
+```conf
+plugin {
+    hymission {
+        only_active_workspace = 1
+        workspace_change_keeps_overview = 1
     }
 }
 ```
@@ -169,6 +212,13 @@ plugin {
 - 再在每行按 `x` 值排序
 - 评估不同 row count
 - 选择总分最高的候选布局
+
+如果开启 `one_workspace_per_row = 1`：
+
+- 布局不再搜索最佳 row count
+- 每个 workspace 在其所属 monitor 上固定占一行
+- 行顺序按当前 overview scope 中的 workspace 顺序自上而下排布
+- 行内仍优先跟随窗口当前的真实水平顺序
 
 具体来源和取舍见 [`docs/research.md`](docs/research.md)。
 
@@ -204,7 +254,9 @@ meson compile -C build-meson
 额外回归建议：
 
 - 当前 monitor 上有 pinned 浮窗时，切换 workspace 后进入 overview，确认 pinned 浮窗仍在 overview 中
-- 打开 overview 后用触控板 workspace swipe 切换工作区，确认手势能正常触发，且 workspace 变化后 overview 会退出
+- 打开 overview 后用触控板 workspace swipe 切换工作区：
+  - `workspace_change_keeps_overview = 1` 且当前 scope 只展示活动 workspace 时，确认 overview 会直接滑到相邻 workspace，且过程中不出现原生普通窗口动画
+  - 其他 scope 下，确认 workspace 切换仍按既有规则被阻止或退出 overview
 
 如果只想验证布局算法而不启动 Hyprland 插件，可以直接运行：
 

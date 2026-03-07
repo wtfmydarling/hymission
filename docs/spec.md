@@ -23,6 +23,7 @@ v1 必做：
 
 - scope-aware overview：支持默认配置范围、`onlycurrentworkspace` 和 `forceall`
 - 打开 / 关闭 overview
+- 官方 trackpad gesture 驱动的 overview 开关，视觉进度跟手且支持中途反向打断
 - compositor-side preview 几何计算
 - preview 渲染
 - 鼠标点击 preview 激活对应窗口并退出 overview
@@ -112,6 +113,14 @@ v1 默认布局算法固定为 row-based strategy：
 
 这意味着 v1 默认偏向更大的 preview，而不是机械追求铺满屏幕。
 
+可选配置补充：
+
+- `one_workspace_per_row = 1` 时，布局引擎不再搜索最佳 row count
+- 同一 participating monitor 上，每个 workspace 的窗口固定占一行
+- 行顺序按当前 overview scope 中的 workspace 顺序自上而下排列
+- 默认顺序为普通 workspace 按 workspace id 升序，其后是当前 scope 纳入的 special workspace
+- 每行内部仍优先跟随窗口当前自然几何的水平顺序；如果 overview 已打开且同窗口集 rebuild，则优先保留既有 preview 顺序
+
 稳定性补充：
 
 - 如果 overview 已经打开，且 rebuild 前后参与窗口集合与参与 monitor 集合未变化，则 preview 应优先保持既有 slot 顺序和 monitor 归属
@@ -163,6 +172,23 @@ v1 dispatcher 名称固定为：
 - `open,*` 在 overview 已可见时，如果 scope 与当前不同，应直接重建到新的 scope；如果 scope 相同，则 no-op
 - 未知参数必须返回 dispatcher error，不得静默回退
 
+### 6.1.1 Trackpad Gesture
+
+- 只接管 Hyprland 官方 gesture 语法里的 `dispatcher, hymission:toggle,...` / `dispatcher, hymission:open,...`
+- 推荐写法：`gesture = 4, vertical, dispatcher, hymission:toggle,forceall`
+- 不支持非官方简写 `gesture = 4, vertical, hymission:toggle,forceall`
+- `vertical` 和 `horizontal` 都要求具备跟手动画；`horizontal` 体感上等价于把左右映射成上下
+- `up` / `down` / `left` / `right` 继续走 Hyprland 默认 dispatcher gesture 语义
+- 默认语义是 state-aware：overview 关闭时上滑打开，overview 打开时下滑关闭
+- `gesture_invert_vertical = 1` 时，上述方向对调
+- 如果手势开始方向与当前状态不匹配，例如 overview 关闭时直接下滑，则整个手势应 no-op，不得先拉出半开 overview
+- 手指未抬起时允许直接反向拖动，把 overview 进度拉回
+- 松手采用 `50% + velocity` 提交规则；未提交时回弹到起始状态
+- gesture 驱动的 close 如果会触发 scrolling focus settle 或 fullscreen restore，close 动画必须从手势释放时的当前可见进度继续，不得先跳回完全展开
+- 当当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1` 时，Hyprland 原生 `gesture = ..., workspace` 必须在 overview 内被接管为 monitor-local 的 overview-to-overview 连续滑动
+- 上述 workspace gesture 必须复用当前 Hyprland 本地实现的 `workspace_swipe_distance`、`workspace_swipe_invert`、`workspace_swipe_min_speed_to_force`、`workspace_swipe_cancel_ratio`、`workspace_swipe_create_new`、`workspace_swipe_direction_lock`、`workspace_swipe_direction_lock_threshold`、`workspace_swipe_forever`、`workspace_swipe_use_r` 和 `general:gaps_workspaces`
+- overview 内的 workspace gesture 中间帧不得出现原生普通 workspace 切换动画；屏幕上只能看到 source overview 与 target overview 的滑动过渡
+
 ### 6.2 鼠标
 
 - 鼠标移动到 preview 上时，高亮该 preview
@@ -213,8 +239,12 @@ dispatcher override：
 
 workspace 切换补充语义：
 
-- overview 打开时，触控板 workspace swipe 仍应保持可用
-- 如果 workspace swipe 或其他手段导致 owner monitor 的活动 workspace 变化，overview 应在工作区切换成立后退出
+- 如果当前 overview scope 只展示活动 workspace，且 `workspace_change_keeps_overview = 1`，则键盘切 workspace、dispatcher 切 workspace 或原生 workspace swipe 成功后，overview 应直接过渡到新 workspace 的 overview，而不是先退出或先解散再重建
+- 上述过渡应只作用于触发切换的 monitor；其他 participating monitor 保持当前 overview 不动
+- 上述过渡提交时必须屏蔽 Hyprland 原生普通 workspace in/out 动画，只保留 overview 自己的滑动
+- 如果当前 overview scope 只展示活动 workspace，但 `workspace_change_keeps_overview = 0`，则 workspace 变化成立后，overview 应退出到正常工作区
+- 如果当前 overview scope 同时展示了多个 workspace，则 overview 内必须禁止 workspace 切换，包括 keyboard dispatcher 和原生 workspace swipe
+- 多 workspace overview 期间，参与 monitor 上活动 workspace 的名字应临时改成 `Mission Control`，退出 overview 后恢复原名
 - overview 不得通过持续 `rawWindowFocus(...)` 把工作区切换强行拉回原 workspace
 
 ## 8. 当前配置面
@@ -234,17 +264,23 @@ workspace 切换补充语义：
 - `layout_scale_weight`
 - `layout_space_weight`
 - `overview_focus_follows_mouse`
+- `gesture_invert_vertical`
 - `only_active_workspace`
 - `only_active_monitor`
 - `show_special`
+- `workspace_change_keeps_overview`
+- `one_workspace_per_row`
 
 约束：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
 - `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
 - `overview_focus_follows_mouse` 只控制 overview 内部选中项是否跟随鼠标，以及退出 overview 时是否提交当前选中窗口；它不要求 overview 打开期间持续改真实 focus
+- `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
+- `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
+- `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - 除 `overview_focus_follows_mouse` 外，overview 状态机、动画、输入等配置不在 v1 第一阶段暴露
 - 在没有充分稳定前，不新增大量面向最终用户的细粒度行为开关
 

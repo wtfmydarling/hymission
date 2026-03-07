@@ -25,6 +25,7 @@ struct WindowInput {
     std::size_t index = 0;
     Rect        natural;
     std::string label;
+    std::size_t rowGroup = 0;
 };
 
 struct WindowSlot {
@@ -48,6 +49,7 @@ struct LayoutConfig {
     double layoutScaleWeight = 1.0;
     double minSlotScale = 0.10;
     bool   preserveInputOrder = false;
+    bool   forceRowGroups = false;
 };
 
 class MissionControlLayout {
