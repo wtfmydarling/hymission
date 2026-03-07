@@ -19,6 +19,10 @@
 - Pinned-window, special-workspace, and scrolling-layout aware behavior
 - Workspace-to-workspace overview transitions without showing the native workspace animation in the middle
 
+
+https://github.com/user-attachments/assets/8a2ae527-7546-4795-a082-bb89bd370f0e
+
+
 ## Installation
 
 ### Install with `hyprpm`
