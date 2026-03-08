@@ -57,6 +57,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("workspace_strip_thickness", 144L);
     CONF("workspace_strip_gap", 24L);
     CONF("hide_bar_when_strip", 1L);
+    CONF("hide_bar_animation", 1L);
+    CONF("hide_bar_animation_blur", 1L);
+    CONF("hide_bar_animation_move_multiplier", 1.0F);
+    CONF("hide_bar_animation_scale_divisor", 1.06F);
+    CONF("hide_bar_animation_alpha_end", 0.0F);
     CONF("show_focus_indicator", 0L);
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);

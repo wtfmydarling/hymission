@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <memory>
@@ -313,6 +314,16 @@ class OverviewController {
         Vector2D   framebufferSize;
     };
 
+    struct HiddenStripLayerProxy {
+        PHLLS      layer;
+        PHLMONITOR monitor;
+        Rect       capturedRectGlobal;
+        Rect       proxyRectGlobal;
+        Vector2D   snapshotSize;
+        SP<CFramebuffer> framebuffer;
+        std::array<SP<CFramebuffer>, 4> blurredFramebuffers;
+    };
+
     using SurfaceGetTexBoxFn = CBox (*)(void*);
     using SurfaceBoundingBoxFn = std::optional<CBox> (*)(void*);
     using SurfaceOpaqueRegionFn = CRegion (*)(void*);
@@ -336,6 +347,11 @@ class OverviewController {
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
     [[nodiscard]] bool         hideBarsWhenStripShownEnabled() const;
+    [[nodiscard]] bool         hideBarAnimationEffectsEnabled() const;
+    [[nodiscard]] bool         hideBarAnimationBlurEnabled() const;
+    [[nodiscard]] double       hideBarAnimationMoveMultiplier() const;
+    [[nodiscard]] double       hideBarAnimationScaleDivisor() const;
+    [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
@@ -418,6 +434,15 @@ class OverviewController {
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
                                                                                    CSurfacePassElement::SRenderData& renderData) const;
+    [[nodiscard]] double                        hiddenStripLayerProgress(const PHLLS& layer, const PHLMONITOR& monitor) const;
+    void                                        clearHiddenStripLayerProxies();
+    void                                        syncHiddenStripLayerProxies();
+    [[nodiscard]] bool                          captureHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor);
+    [[nodiscard]] HiddenStripLayerProxy*        hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor);
+    [[nodiscard]] const HiddenStripLayerProxy*  hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor) const;
+    [[nodiscard]] Rect                          hiddenStripLayerProxyRect(const HiddenStripLayerProxy& proxy) const;
+    [[nodiscard]] bool                          shouldRenderHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor) const;
+    void                                        renderHiddenStripLayerProxies() const;
     [[nodiscard]] bool                          shouldSuppressSurfaceBlur(void* surfacePassThisptr) const;
     [[nodiscard]] bool                          prepareSurfaceRenderData(void* surfacePassThisptr, const char* context, CSurfacePassElement::SRenderData*& renderData,
                                                                          PHLMONITOR& monitor, SurfaceRenderDataSnapshot& snapshot) const;
@@ -559,6 +584,7 @@ class OverviewController {
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
     StripPreviewContext      m_stripPreviewContext;
+    std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;
     bool                     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
     bool                     m_beginCloseInProgress = false;

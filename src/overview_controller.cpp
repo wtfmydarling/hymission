@@ -69,6 +69,7 @@ class OverviewOverlayPassElement final : public IPassElement {
         if (!expectedMonitor || renderMonitor != expectedMonitor)
             return;
 
+        m_controller->renderHiddenStripLayerProxies();
         m_controller->renderSelectionChrome();
         m_controller->renderWorkspaceStrip();
     }
@@ -331,6 +332,409 @@ Rect scaleRectForRender(const Rect& rect, const PHLMONITOR& monitor) {
 
 Rect rectToMonitorRenderLocal(const Rect& rect, const PHLMONITOR& monitor) {
     return scaleRectForRender(rectToMonitorLocal(rect, monitor), monitor);
+}
+
+CFramebuffer* layerFramebufferFor(const PHLLS& layer) {
+    if (!layer || !g_pHyprOpenGL)
+        return nullptr;
+
+    const auto it = std::find_if(g_pHyprOpenGL->m_layerFramebuffers.begin(), g_pHyprOpenGL->m_layerFramebuffers.end(),
+                                 [&](const auto& entry) { return entry.first.lock() == layer; });
+    return it == g_pHyprOpenGL->m_layerFramebuffers.end() ? nullptr : &it->second;
+}
+
+void setTextureLinearFiltering(const SP<CTexture>& texture) {
+    if (!texture)
+        return;
+
+    texture->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    texture->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+}
+
+void setFramebufferLinearFiltering(CFramebuffer& framebuffer) {
+    setTextureLinearFiltering(framebuffer.getTexture());
+}
+
+struct FramebufferBlitRect {
+    GLint left = 0;
+    GLint bottom = 0;
+    GLint right = 0;
+    GLint top = 0;
+};
+
+std::optional<FramebufferBlitRect> rectToFramebufferBlitRect(const Rect& rect, const Vector2D& framebufferSize) {
+    const GLint framebufferWidth = std::max(1, static_cast<int>(std::lround(framebufferSize.x)));
+    const GLint framebufferHeight = std::max(1, static_cast<int>(std::lround(framebufferSize.y)));
+
+    const GLint left = std::clamp(static_cast<GLint>(std::floor(rect.x)), 0, framebufferWidth);
+    const GLint right = std::clamp(static_cast<GLint>(std::ceil(rect.x + rect.width)), 0, framebufferWidth);
+    const GLint topFromTop = std::clamp(static_cast<GLint>(std::floor(rect.y)), 0, framebufferHeight);
+    const GLint bottomFromTop = std::clamp(static_cast<GLint>(std::ceil(rect.y + rect.height)), 0, framebufferHeight);
+    const GLint bottom = framebufferHeight - bottomFromTop;
+    const GLint top = framebufferHeight - topFromTop;
+
+    if (left >= right || bottom >= top)
+        return std::nullopt;
+
+    return FramebufferBlitRect{
+        .left = left,
+        .bottom = bottom,
+        .right = right,
+        .top = top,
+    };
+}
+
+bool blitFramebufferRegion(CFramebuffer& sourceFramebuffer, CFramebuffer& targetFramebuffer, const Rect& sourceRect, const Rect& targetRect) {
+    if (!sourceFramebuffer.isAllocated() || !targetFramebuffer.isAllocated())
+        return false;
+
+    const auto sourceBlitRect = rectToFramebufferBlitRect(sourceRect, sourceFramebuffer.m_size);
+    const auto targetBlitRect = rectToFramebufferBlitRect(targetRect, targetFramebuffer.m_size);
+    if (!sourceBlitRect || !targetBlitRect)
+        return false;
+
+    GLint       previousReadFramebuffer = 0;
+    GLint       previousDrawFramebuffer = 0;
+    GLfloat     previousClearColor[4] = {};
+    const bool  scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFramebuffer.getFBID());
+    glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFramebuffer.getFBID());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, targetFramebuffer.getFBID());
+    glBlitFramebuffer(sourceBlitRect->left, sourceBlitRect->bottom, sourceBlitRect->right, sourceBlitRect->top, targetBlitRect->left, targetBlitRect->bottom,
+                      targetBlitRect->right, targetBlitRect->top, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    glClearColor(previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previousDrawFramebuffer);
+    if (scissorEnabled)
+        glEnable(GL_SCISSOR_TEST);
+    else
+        glDisable(GL_SCISSOR_TEST);
+
+    return glGetError() == GL_NO_ERROR;
+}
+
+bool renderTextureIntoFramebuffer(const PHLMONITOR& monitor, CFramebuffer& targetFramebuffer, const SP<CTexture>& texture, const CBox& destinationBox) {
+    if (!monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !texture || !targetFramebuffer.isAllocated())
+        return false;
+
+    setTextureLinearFiltering(texture);
+    setFramebufferLinearFiltering(targetFramebuffer);
+
+    const bool previousBlockScreenShader = g_pHyprOpenGL->m_renderData.blockScreenShader;
+    CRegion     fakeDamage{0, 0, targetFramebuffer.m_size.x, targetFramebuffer.m_size.y};
+    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &targetFramebuffer)) {
+        g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
+        return false;
+    }
+
+    g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+    g_pHyprOpenGL->clear(CHyprColor{0.0, 0.0, 0.0, 0.0});
+    g_pHyprOpenGL->renderTexture(texture, destinationBox, {.a = 1.0F});
+    g_pHyprRenderer->endRender();
+    g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
+    return true;
+}
+
+struct GaussianBlurPipeline {
+    GLuint program = 0;
+    GLuint vertexShader = 0;
+    GLuint fragmentShader = 0;
+    GLuint vao = 0;
+    GLuint vbo = 0;
+    GLint  textureLocation = -1;
+    GLint  texelSizeLocation = -1;
+    GLint  directionLocation = -1;
+    GLint  radiusLocation = -1;
+    bool   ready = false;
+    bool   failed = false;
+};
+
+GaussianBlurPipeline& gaussianBlurPipeline() {
+    static GaussianBlurPipeline pipeline;
+    return pipeline;
+}
+
+GLuint compileShaderStage(GLenum type, const char* source) {
+    const GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+
+    GLint compiled = GL_FALSE;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    if (compiled == GL_TRUE)
+        return shader;
+
+    GLint infoLogLength = 0;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLogLength);
+    std::string infoLog(std::max(1, infoLogLength), '\0');
+    glGetShaderInfoLog(shader, infoLogLength, nullptr, infoLog.data());
+    glDeleteShader(shader);
+    if (Log::logger)
+        Log::logger->log(Log::ERR, "[hymission] gaussian blur shader compile failed: " + infoLog);
+    return 0;
+}
+
+bool ensureGaussianBlurPipeline() {
+    auto& pipeline = gaussianBlurPipeline();
+    if (pipeline.ready)
+        return true;
+    if (pipeline.failed)
+        return false;
+    if (!g_pHyprRenderer)
+        return false;
+
+    g_pHyprRenderer->makeEGLCurrent();
+
+    static constexpr char kVertexSource[] = R"(#version 320 es
+precision highp float;
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 vTexCoord;
+void main() {
+    vTexCoord = aTexCoord;
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+    static constexpr char kFragmentSource[] = R"(#version 320 es
+precision highp float;
+in vec2 vTexCoord;
+layout(location = 0) out vec4 fragColor;
+uniform sampler2D uTexture;
+uniform vec2 uTexelSize;
+uniform vec2 uDirection;
+uniform float uRadius;
+void main() {
+    vec2 stepVec = uTexelSize * uDirection * uRadius;
+    vec4 color = texture(uTexture, vTexCoord) * 0.2270270270;
+    color += texture(uTexture, vTexCoord + stepVec * 1.3846153846) * 0.3162162162;
+    color += texture(uTexture, vTexCoord - stepVec * 1.3846153846) * 0.3162162162;
+    color += texture(uTexture, vTexCoord + stepVec * 3.2307692308) * 0.0702702703;
+    color += texture(uTexture, vTexCoord - stepVec * 3.2307692308) * 0.0702702703;
+    fragColor = color;
+}
+)";
+
+    pipeline.vertexShader = compileShaderStage(GL_VERTEX_SHADER, kVertexSource);
+    pipeline.fragmentShader = compileShaderStage(GL_FRAGMENT_SHADER, kFragmentSource);
+    if (!pipeline.vertexShader || !pipeline.fragmentShader) {
+        pipeline.failed = true;
+        return false;
+    }
+
+    pipeline.program = glCreateProgram();
+    glAttachShader(pipeline.program, pipeline.vertexShader);
+    glAttachShader(pipeline.program, pipeline.fragmentShader);
+    glLinkProgram(pipeline.program);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv(pipeline.program, GL_LINK_STATUS, &linked);
+    if (linked != GL_TRUE) {
+        GLint infoLogLength = 0;
+        glGetProgramiv(pipeline.program, GL_INFO_LOG_LENGTH, &infoLogLength);
+        std::string infoLog(std::max(1, infoLogLength), '\0');
+        glGetProgramInfoLog(pipeline.program, infoLogLength, nullptr, infoLog.data());
+        if (Log::logger)
+            Log::logger->log(Log::ERR, "[hymission] gaussian blur shader link failed: " + infoLog);
+        glDeleteProgram(pipeline.program);
+        pipeline.program = 0;
+        pipeline.failed = true;
+        return false;
+    }
+
+    static constexpr std::array<float, 16> kQuadVertices = {
+        -1.0F, -1.0F, 0.0F, 0.0F,
+         1.0F, -1.0F, 1.0F, 0.0F,
+        -1.0F,  1.0F, 0.0F, 1.0F,
+         1.0F,  1.0F, 1.0F, 1.0F,
+    };
+
+    glGenVertexArrays(1, &pipeline.vao);
+    glGenBuffers(1, &pipeline.vbo);
+    glBindVertexArray(pipeline.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, pipeline.vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kQuadVertices), kQuadVertices.data(), GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(0));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    pipeline.textureLocation = glGetUniformLocation(pipeline.program, "uTexture");
+    pipeline.texelSizeLocation = glGetUniformLocation(pipeline.program, "uTexelSize");
+    pipeline.directionLocation = glGetUniformLocation(pipeline.program, "uDirection");
+    pipeline.radiusLocation = glGetUniformLocation(pipeline.program, "uRadius");
+    pipeline.ready = pipeline.textureLocation >= 0 && pipeline.texelSizeLocation >= 0 && pipeline.directionLocation >= 0 && pipeline.radiusLocation >= 0;
+    pipeline.failed = !pipeline.ready;
+    return pipeline.ready;
+}
+
+void destroyGaussianBlurPipeline() {
+    auto& pipeline = gaussianBlurPipeline();
+    if (!pipeline.ready && !pipeline.failed && pipeline.program == 0 && pipeline.vao == 0 && pipeline.vbo == 0 && pipeline.vertexShader == 0 && pipeline.fragmentShader == 0)
+        return;
+
+    if (g_pHyprRenderer)
+        g_pHyprRenderer->makeEGLCurrent();
+
+    if (pipeline.vbo)
+        glDeleteBuffers(1, &pipeline.vbo);
+    if (pipeline.vao)
+        glDeleteVertexArrays(1, &pipeline.vao);
+    if (pipeline.program)
+        glDeleteProgram(pipeline.program);
+    if (pipeline.vertexShader)
+        glDeleteShader(pipeline.vertexShader);
+    if (pipeline.fragmentShader)
+        glDeleteShader(pipeline.fragmentShader);
+    pipeline = {};
+}
+
+bool renderGaussianBlurPass(CFramebuffer& sourceFramebuffer, CFramebuffer& targetFramebuffer, const Vector2D& direction, float radius) {
+    if (!ensureGaussianBlurPipeline() || !sourceFramebuffer.isAllocated() || !targetFramebuffer.isAllocated())
+        return false;
+
+    auto texture = sourceFramebuffer.getTexture();
+    if (!texture)
+        return false;
+
+    setTextureLinearFiltering(texture);
+    setFramebufferLinearFiltering(targetFramebuffer);
+
+    GLint previousFramebuffer = 0;
+    GLint previousProgram = 0;
+    GLint previousVAO = 0;
+    GLint previousArrayBuffer = 0;
+    GLint previousActiveTexture = 0;
+    GLint previousTexture0 = 0;
+    GLint previousViewport[4] = {};
+    const GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    const GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVAO);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFramebuffer.getFBID());
+    glViewport(0, 0, static_cast<GLsizei>(std::lround(targetFramebuffer.m_size.x)), static_cast<GLsizei>(std::lround(targetFramebuffer.m_size.y)));
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0F, 0.0F, 0.0F, 0.0F);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    const auto& pipeline = gaussianBlurPipeline();
+    glUseProgram(pipeline.program);
+    glBindVertexArray(pipeline.vao);
+    texture->bind();
+    glUniform1i(pipeline.textureLocation, 0);
+    glUniform2f(pipeline.texelSizeLocation, 1.0F / static_cast<float>(std::max(1.0, sourceFramebuffer.m_size.x)),
+                1.0F / static_cast<float>(std::max(1.0, sourceFramebuffer.m_size.y)));
+    glUniform2f(pipeline.directionLocation, static_cast<float>(direction.x), static_cast<float>(direction.y));
+    glUniform1f(pipeline.radiusLocation, radius);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    texture->unbind();
+
+    glBindTexture(GL_TEXTURE_2D, previousTexture0);
+    glActiveTexture(previousActiveTexture);
+    glBindBuffer(GL_ARRAY_BUFFER, previousArrayBuffer);
+    glBindVertexArray(previousVAO);
+    glUseProgram(previousProgram);
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFramebuffer);
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    if (blendEnabled)
+        glEnable(GL_BLEND);
+    else
+        glDisable(GL_BLEND);
+    if (scissorEnabled)
+        glEnable(GL_SCISSOR_TEST);
+    else
+        glDisable(GL_SCISSOR_TEST);
+    return true;
+}
+
+bool buildBlurredProxyFramebuffers(const SP<CFramebuffer>& sourceFramebuffer, const std::array<SP<CFramebuffer>, 4>& blurredFramebuffers) {
+    if (!g_pHyprRenderer || !sourceFramebuffer || !sourceFramebuffer->isAllocated())
+        return false;
+
+    g_pHyprRenderer->makeEGLCurrent();
+
+    const int framebufferWidth = static_cast<int>(std::lround(sourceFramebuffer->m_size.x));
+    const int framebufferHeight = static_cast<int>(std::lround(sourceFramebuffer->m_size.y));
+    CFramebuffer horizontalFramebuffer;
+    CFramebuffer verticalFramebuffer;
+    if (!horizontalFramebuffer.alloc(framebufferWidth, framebufferHeight) || !verticalFramebuffer.alloc(framebufferWidth, framebufferHeight))
+        return false;
+    setFramebufferLinearFiltering(horizontalFramebuffer);
+    setFramebufferLinearFiltering(verticalFramebuffer);
+
+    constexpr std::array<int, 4> kBlurIterations = {1, 3, 6, 10};
+    constexpr float              kGaussianStepRadius = 1.35F;
+    std::size_t                  blurLevelIndex = 0;
+    int                          completedIterations = 0;
+    CFramebuffer*                currentSource = sourceFramebuffer.get();
+
+    while (blurLevelIndex < blurredFramebuffers.size()) {
+        if (!blurredFramebuffers[blurLevelIndex] || !blurredFramebuffers[blurLevelIndex]->isAllocated())
+            return false;
+        setFramebufferLinearFiltering(*blurredFramebuffers[blurLevelIndex]);
+
+        if (!renderGaussianBlurPass(*currentSource, horizontalFramebuffer, Vector2D{1.0, 0.0}, kGaussianStepRadius))
+            return false;
+        if (!renderGaussianBlurPass(horizontalFramebuffer, verticalFramebuffer, Vector2D{0.0, 1.0}, kGaussianStepRadius))
+            return false;
+
+        ++completedIterations;
+        currentSource = &verticalFramebuffer;
+
+        if (completedIterations < kBlurIterations[blurLevelIndex])
+            continue;
+
+        if (!blitFramebufferRegion(*currentSource, *blurredFramebuffers[blurLevelIndex], makeRect(0.0, 0.0, currentSource->m_size.x, currentSource->m_size.y),
+                                   makeRect(0.0, 0.0, blurredFramebuffers[blurLevelIndex]->m_size.x, blurredFramebuffers[blurLevelIndex]->m_size.y)))
+            return false;
+
+        ++blurLevelIndex;
+    }
+
+    return true;
+}
+
+Rect scaleRectFromAnchor(const Rect& rect, const Rect& contentRect, WorkspaceStripAnchor anchor, double scaleX, double scaleY) {
+    double anchorX = contentRect.x + contentRect.width * 0.5;
+    double anchorY = contentRect.y + contentRect.height * 0.5;
+
+    switch (anchor) {
+        case WorkspaceStripAnchor::Left:
+            anchorX = contentRect.x;
+            break;
+        case WorkspaceStripAnchor::Right:
+            anchorX = contentRect.x + contentRect.width;
+            break;
+        case WorkspaceStripAnchor::Top:
+        default:
+            anchorY = contentRect.y;
+            break;
+    }
+
+    const double width = rect.width * scaleX;
+    const double height = rect.height * scaleY;
+    return makeRect(anchorX - (anchorX - rect.x) * scaleX, anchorY - (anchorY - rect.y) * scaleY, width, height);
 }
 
 double scaleLengthForRender(const PHLMONITOR& monitor, double logicalLength) {
@@ -788,6 +1192,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 }
 
 OverviewController::~OverviewController() {
+    destroyGaussianBlurPipeline();
     clearRegisteredTrackpadGestures();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
@@ -1385,12 +1790,10 @@ void OverviewController::renderLayerHook(void* rendererThisptr, PHLLS layer, PHL
         return;
 
     if (!lockscreen && shouldHideLayerSurface(layer, monitor)) {
-        if (debugLogsEnabled()) {
-            std::ostringstream out;
-            out << "[hymission] hide layer during strip namespace=" << layer->m_namespace << " layer=" << layer->m_layer << " monitor=" << monitor->m_name;
-            debugLog(out.str());
-        }
-        return;
+        if (!hideBarAnimationEffectsEnabled())
+            return;
+        if (shouldRenderHiddenStripLayerProxy(layer, monitor))
+            return;
     }
 
     m_renderLayerOriginal(rendererThisptr, layer, monitor, now, popups, lockscreen);
@@ -1771,6 +2174,26 @@ bool OverviewController::workspaceChangeKeepsOverviewEnabled() const {
 
 bool OverviewController::hideBarsWhenStripShownEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:hide_bar_when_strip", 1) != 0;
+}
+
+bool OverviewController::hideBarAnimationEffectsEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:hide_bar_animation", 1) != 0;
+}
+
+bool OverviewController::hideBarAnimationBlurEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:hide_bar_animation_blur", 1) != 0;
+}
+
+double OverviewController::hideBarAnimationMoveMultiplier() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 1.0), 0.0, 2.0);
+}
+
+double OverviewController::hideBarAnimationScaleDivisor() const {
+    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.06));
+}
+
+double OverviewController::hideBarAnimationAlphaEnd() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0), 0.0, 1.0);
 }
 
 bool OverviewController::showFocusIndicatorEnabled() const {
@@ -4025,6 +4448,354 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
     return true;
 }
 
+double OverviewController::hiddenStripLayerProgress(const PHLLS& layer, const PHLMONITOR& monitor) const {
+    if (!shouldHideLayerSurface(layer, monitor))
+        return 0.0;
+
+    return clampUnit(visualProgress());
+}
+
+void OverviewController::clearHiddenStripLayerProxies() {
+    m_hiddenStripLayerProxies.clear();
+}
+
+OverviewController::HiddenStripLayerProxy* OverviewController::hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor) {
+    const auto it = std::find_if(m_hiddenStripLayerProxies.begin(), m_hiddenStripLayerProxies.end(),
+                                 [&](const HiddenStripLayerProxy& proxy) { return proxy.layer == layer && proxy.monitor == monitor; });
+    return it == m_hiddenStripLayerProxies.end() ? nullptr : &*it;
+}
+
+const OverviewController::HiddenStripLayerProxy* OverviewController::hiddenStripLayerProxyFor(const PHLLS& layer, const PHLMONITOR& monitor) const {
+    const auto it = std::find_if(m_hiddenStripLayerProxies.begin(), m_hiddenStripLayerProxies.end(),
+                                 [&](const HiddenStripLayerProxy& proxy) { return proxy.layer == layer && proxy.monitor == monitor; });
+    return it == m_hiddenStripLayerProxies.end() ? nullptr : &*it;
+}
+
+bool OverviewController::captureHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor) {
+    if (!layer || !monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !shouldHideLayerSurface(layer, monitor))
+        return false;
+
+    constexpr double kHiddenStripBlurPaddingLogical = 24.0;
+    const Rect capturedRectGlobal = makeRect(layer->m_geometry.x, layer->m_geometry.y, layer->m_geometry.w, layer->m_geometry.h);
+    const Rect proxyRectGlobal =
+        makeRect(capturedRectGlobal.x - kHiddenStripBlurPaddingLogical, capturedRectGlobal.y - kHiddenStripBlurPaddingLogical,
+                 capturedRectGlobal.width + kHiddenStripBlurPaddingLogical * 2.0, capturedRectGlobal.height + kHiddenStripBlurPaddingLogical * 2.0);
+    if (capturedRectGlobal.width <= 1.0 || capturedRectGlobal.height <= 1.0) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar capture skipped namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                << " captured=" << rectToString(capturedRectGlobal);
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    const int fbWidth = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.width * renderScaleForMonitor(monitor))));
+    const int fbHeight = std::max(1, static_cast<int>(std::ceil(proxyRectGlobal.height * renderScaleForMonitor(monitor))));
+
+    g_pHyprRenderer->makeEGLCurrent();
+    g_pHyprRenderer->makeSnapshot(layer);
+    auto* sourceFramebuffer = layerFramebufferFor(layer);
+    if (!sourceFramebuffer || !sourceFramebuffer->isAllocated() || !sourceFramebuffer->getTexture()) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar capture missing source namespace=" << layer->m_namespace << " monitor=" << monitor->m_name;
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    auto* existing = hiddenStripLayerProxyFor(layer, monitor);
+    if (!existing) {
+        HiddenStripLayerProxy proxy;
+        proxy.layer = layer;
+        proxy.monitor = monitor;
+        proxy.capturedRectGlobal = capturedRectGlobal;
+        proxy.proxyRectGlobal = proxyRectGlobal;
+        proxy.snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
+        proxy.framebuffer = makeShared<CFramebuffer>();
+        for (auto& blurredFramebuffer : proxy.blurredFramebuffers)
+            blurredFramebuffer = makeShared<CFramebuffer>();
+        m_hiddenStripLayerProxies.push_back(std::move(proxy));
+        existing = &m_hiddenStripLayerProxies.back();
+    }
+
+    existing->capturedRectGlobal = capturedRectGlobal;
+    existing->proxyRectGlobal = proxyRectGlobal;
+    existing->snapshotSize = Vector2D{static_cast<double>(fbWidth), static_cast<double>(fbHeight)};
+    if (!existing->framebuffer)
+        existing->framebuffer = makeShared<CFramebuffer>();
+    for (auto& blurredFramebuffer : existing->blurredFramebuffers) {
+        if (!blurredFramebuffer)
+            blurredFramebuffer = makeShared<CFramebuffer>();
+    }
+
+    if (!existing->framebuffer->isAllocated() || std::abs(existing->framebuffer->m_size.x - fbWidth) > 0.5 || std::abs(existing->framebuffer->m_size.y - fbHeight) > 0.5) {
+        existing->framebuffer->release();
+        if (!existing->framebuffer->alloc(fbWidth, fbHeight)) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] strip-bar capture framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                    << " fb=(" << fbWidth << "x" << fbHeight << ")";
+                debugLog(out.str());
+            }
+            return false;
+        }
+        setFramebufferLinearFiltering(*existing->framebuffer);
+    }
+
+    for (auto& blurredFramebuffer : existing->blurredFramebuffers) {
+        if (!blurredFramebuffer->isAllocated() || std::abs(blurredFramebuffer->m_size.x - fbWidth) > 0.5 || std::abs(blurredFramebuffer->m_size.y - fbHeight) > 0.5) {
+            blurredFramebuffer->release();
+            if (!blurredFramebuffer->alloc(fbWidth, fbHeight)) {
+                if (debugLogsEnabled()) {
+                    std::ostringstream out;
+                    out << "[hymission] strip-bar capture blur framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                        << " fb=(" << fbWidth << "x" << fbHeight << ")";
+                    debugLog(out.str());
+                }
+                return false;
+            }
+            setFramebufferLinearFiltering(*blurredFramebuffer);
+        }
+    }
+
+    const double monitorRenderWidth = std::max(1.0, static_cast<double>(monitor->m_size.x) * renderScaleForMonitor(monitor));
+    const double monitorRenderHeight = std::max(1.0, static_cast<double>(monitor->m_size.y) * renderScaleForMonitor(monitor));
+    const Rect   proxyRectRenderLocal = rectToMonitorRenderLocal(proxyRectGlobal, monitor);
+    const Rect   capturedRectRenderLocal = rectToMonitorRenderLocal(capturedRectGlobal, monitor);
+    const double targetOffsetX = capturedRectRenderLocal.x - proxyRectRenderLocal.x;
+    const double targetOffsetY = capturedRectRenderLocal.y - proxyRectRenderLocal.y;
+    constexpr double kSnapshotSizeTolerance = 2.0;
+    const bool       sourceMatchesProxy =
+        std::abs(sourceFramebuffer->m_size.x - static_cast<double>(fbWidth)) <= kSnapshotSizeTolerance &&
+        std::abs(sourceFramebuffer->m_size.y - static_cast<double>(fbHeight)) <= kSnapshotSizeTolerance;
+    const bool sourceMatchesCaptured =
+        std::abs(sourceFramebuffer->m_size.x - capturedRectRenderLocal.width) <= kSnapshotSizeTolerance &&
+        std::abs(sourceFramebuffer->m_size.y - capturedRectRenderLocal.height) <= kSnapshotSizeTolerance;
+    const bool sourceMatchesMonitor =
+        std::abs(sourceFramebuffer->m_size.x - monitorRenderWidth) <= kSnapshotSizeTolerance &&
+        std::abs(sourceFramebuffer->m_size.y - monitorRenderHeight) <= kSnapshotSizeTolerance;
+
+    Rect         sourceRect = makeRect(0.0, 0.0, sourceFramebuffer->m_size.x, sourceFramebuffer->m_size.y);
+    Rect         targetRect = makeRect(targetOffsetX, targetOffsetY, sourceFramebuffer->m_size.x, sourceFramebuffer->m_size.y);
+    CFramebuffer croppedFramebuffer;
+    bool         useCroppedFramebuffer = false;
+    if (sourceMatchesProxy) {
+        targetRect = makeRect(0.0, 0.0, sourceFramebuffer->m_size.x, sourceFramebuffer->m_size.y);
+    } else if (sourceMatchesCaptured) {
+        targetRect = makeRect(targetOffsetX, targetOffsetY, sourceFramebuffer->m_size.x, sourceFramebuffer->m_size.y);
+    } else if (sourceMatchesMonitor) {
+        const double sourceX = std::clamp(capturedRectRenderLocal.x * sourceFramebuffer->m_size.x / monitorRenderWidth, 0.0,
+                                          std::max(0.0, sourceFramebuffer->m_size.x - capturedRectRenderLocal.width));
+        const double sourceY = std::clamp(capturedRectRenderLocal.y * sourceFramebuffer->m_size.y / monitorRenderHeight, 0.0,
+                                          std::max(0.0, sourceFramebuffer->m_size.y - capturedRectRenderLocal.height));
+        const int croppedWidth = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.width)));
+        const int croppedHeight = std::max(1, static_cast<int>(std::lround(capturedRectRenderLocal.height)));
+        if (!croppedFramebuffer.alloc(croppedWidth, croppedHeight)) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] strip-bar capture cropped framebuffer alloc failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                    << " fb=(" << croppedWidth << "x" << croppedHeight << ")";
+                debugLog(out.str());
+            }
+            return false;
+        }
+        setFramebufferLinearFiltering(croppedFramebuffer);
+
+        if (!renderTextureIntoFramebuffer(monitor, croppedFramebuffer, sourceFramebuffer->getTexture(),
+                                          CBox{-sourceX, -sourceY, sourceFramebuffer->m_size.x, sourceFramebuffer->m_size.y})) {
+            if (debugLogsEnabled()) {
+                std::ostringstream out;
+                out << "[hymission] strip-bar capture cropped blit failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                    << " sourceOffset=(" << sourceX << "," << sourceY << ")";
+                debugLog(out.str());
+            }
+            return false;
+        }
+
+        sourceRect = makeRect(0.0, 0.0, croppedFramebuffer.m_size.x, croppedFramebuffer.m_size.y);
+        targetRect = makeRect(targetOffsetX, targetOffsetY, capturedRectRenderLocal.width, capturedRectRenderLocal.height);
+        useCroppedFramebuffer = true;
+    }
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] strip-bar capture namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+            << " captured=" << rectToString(capturedRectGlobal) << " proxy=" << rectToString(proxyRectGlobal)
+            << " capturedRender=" << rectToString(capturedRectRenderLocal) << " proxyRender=" << rectToString(proxyRectRenderLocal)
+            << " targetOffset=(" << targetOffsetX << "," << targetOffsetY << ")"
+            << " sourceFb=(" << sourceFramebuffer->m_size.x << "x" << sourceFramebuffer->m_size.y << ")"
+            << " fb=(" << fbWidth << "x" << fbHeight << ")"
+            << " matchProxy=" << sourceMatchesProxy << " matchCaptured=" << sourceMatchesCaptured << " matchMonitor=" << sourceMatchesMonitor
+            << " sourceRect=" << rectToString(sourceRect) << " targetRect=" << rectToString(targetRect);
+        debugLog(out.str());
+    }
+
+    auto& blitSourceFramebuffer = useCroppedFramebuffer ? croppedFramebuffer : *sourceFramebuffer;
+    if (!blitFramebufferRegion(blitSourceFramebuffer, *existing->framebuffer, sourceRect, targetRect)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar capture blit failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name
+                << " sourceRect=" << rectToString(sourceRect) << " targetRect=" << rectToString(targetRect);
+            debugLog(out.str());
+        }
+        return false;
+    }
+
+    if (!buildBlurredProxyFramebuffers(existing->framebuffer, existing->blurredFramebuffers)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar capture blur build failed namespace=" << layer->m_namespace << " monitor=" << monitor->m_name;
+            debugLog(out.str());
+        }
+        return true;
+    }
+
+    return true;
+}
+
+void OverviewController::syncHiddenStripLayerProxies() {
+    if (!isVisible() || !workspaceStripEnabled(m_state) || !hideBarsWhenStripShownEnabled() || !hideBarAnimationEffectsEnabled()) {
+        clearHiddenStripLayerProxies();
+        return;
+    }
+
+    std::vector<std::pair<PHLLS, PHLMONITOR>> desired;
+    for (const auto& layer : g_pCompositor->m_layers) {
+        const auto monitor = layer ? layer->m_monitor.lock() : PHLMONITOR{};
+        if (!shouldHideLayerSurface(layer, monitor))
+            continue;
+
+        desired.emplace_back(layer, monitor);
+        const bool captured = captureHiddenStripLayerProxy(layer, monitor);
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar sync namespace=" << layer->m_namespace << " monitor="
+                << (monitor ? monitor->m_name : std::string("<null-monitor>")) << " captured=" << (captured ? 1 : 0);
+            debugLog(out.str());
+        }
+        if (!captured) {
+            std::erase_if(m_hiddenStripLayerProxies, [&](const HiddenStripLayerProxy& proxy) { return proxy.layer == layer && proxy.monitor == monitor; });
+        }
+    }
+
+    m_hiddenStripLayerProxies.erase(std::remove_if(m_hiddenStripLayerProxies.begin(), m_hiddenStripLayerProxies.end(),
+                                                   [&](const HiddenStripLayerProxy& proxy) {
+                                                       return std::none_of(desired.begin(), desired.end(), [&](const auto& entry) {
+                                                           return entry.first == proxy.layer && entry.second == proxy.monitor;
+                                                       });
+                                                   }),
+                                    m_hiddenStripLayerProxies.end());
+}
+
+Rect OverviewController::hiddenStripLayerProxyRect(const HiddenStripLayerProxy& proxy) const {
+    const double hiddenness = hiddenStripLayerProgress(proxy.layer, proxy.monitor);
+    const auto   anchor = parseWorkspaceStripAnchor(workspaceStripAnchor());
+    const double scaleTarget = 1.0 / hideBarAnimationScaleDivisor();
+    const double scale = 1.0 - (1.0 - scaleTarget) * hiddenness;
+    const Rect   stripBand = workspaceStripBandRectForMonitor(proxy.monitor, m_state);
+    const double moveMultiplier = hideBarAnimationMoveMultiplier();
+
+    Rect rect = scaleRectFromAnchor(proxy.proxyRectGlobal, proxy.capturedRectGlobal, anchor, scale, scale);
+    switch (anchor) {
+        case WorkspaceStripAnchor::Left:
+            rect = translateRect(rect, stripBand.width * hiddenness * moveMultiplier, 0.0);
+            break;
+        case WorkspaceStripAnchor::Right:
+            rect = translateRect(rect, -stripBand.width * hiddenness * moveMultiplier, 0.0);
+            break;
+        case WorkspaceStripAnchor::Top:
+        default:
+            rect = translateRect(rect, 0.0, stripBand.height * hiddenness * moveMultiplier);
+            break;
+    }
+
+    return rect;
+}
+
+bool OverviewController::shouldRenderHiddenStripLayerProxy(const PHLLS& layer, const PHLMONITOR& monitor) const {
+    if (!shouldHideLayerSurface(layer, monitor))
+        return false;
+
+    // Closing completion schedules deferred deactivate before the overlay pass
+    // is emitted again. Hand rendering back to the real layer immediately so
+    // there is no one-frame gap where both the live bar and proxy are absent.
+    if (m_deactivatePending)
+        return false;
+
+    const auto* proxy = hiddenStripLayerProxyFor(layer, monitor);
+    auto*       framebuffer = proxy && proxy->framebuffer ? proxy->framebuffer.get() : nullptr;
+    return proxy && framebuffer && framebuffer->isAllocated() && framebuffer->getTexture();
+}
+
+void OverviewController::renderHiddenStripLayerProxies() const {
+    if (m_hiddenStripLayerProxies.empty() || !g_pHyprOpenGL || !hideBarAnimationEffectsEnabled())
+        return;
+
+    const auto renderMonitor = g_pHyprOpenGL->m_renderData.pMonitor.lock();
+    if (!renderMonitor)
+        return;
+
+    for (const auto& proxy : m_hiddenStripLayerProxies) {
+        if (!proxy.layer || !proxy.monitor || proxy.monitor != renderMonitor)
+            continue;
+        if (!shouldHideLayerSurface(proxy.layer, renderMonitor))
+            continue;
+
+        auto* sourceFramebuffer = proxy.framebuffer ? proxy.framebuffer.get() : nullptr;
+        if (!sourceFramebuffer || !sourceFramebuffer->isAllocated() || !sourceFramebuffer->getTexture())
+            continue;
+
+        const double hiddenness = hiddenStripLayerProgress(proxy.layer, renderMonitor);
+        const double alphaEnd = hideBarAnimationAlphaEnd();
+        const float  proxyAlpha = static_cast<float>(std::clamp(1.0 + (alphaEnd - 1.0) * hiddenness, 0.0, 1.0));
+        if (proxyAlpha <= 0.001F)
+            continue;
+
+        const float blurStrength =
+            hideBarAnimationBlurEnabled() ? static_cast<float>(easeOutCubic(clampUnit((hiddenness - 0.12) / 0.38))) : 0.0F;
+        const float sharpAlpha = hideBarAnimationBlurEnabled() ? (proxyAlpha * std::pow(std::max(0.0F, 1.0F - blurStrength), 2.0F)) : proxyAlpha;
+        const float blurredAlpha = hideBarAnimationBlurEnabled() ? (proxyAlpha * std::clamp(0.2F + 0.8F * blurStrength, 0.0F, 1.0F)) : 0.0F;
+        const Rect  targetRect = rectToMonitorRenderLocal(hiddenStripLayerProxyRect(proxy), renderMonitor);
+        if (targetRect.width <= 0.0 || targetRect.height <= 0.0)
+            continue;
+
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] strip-bar render namespace=" << proxy.layer->m_namespace << " monitor=" << renderMonitor->m_name
+                << " hiddenness=" << hiddenness << " proxyAlpha=" << proxyAlpha << " blurStrength=" << blurStrength
+                << " proxyRect=" << rectToString(proxy.proxyRectGlobal) << " capturedRect=" << rectToString(proxy.capturedRectGlobal)
+                << " targetRect=" << rectToString(targetRect);
+            debugLog(out.str());
+        }
+
+        if (sharpAlpha > 0.002F)
+            g_pHyprOpenGL->renderTexture(sourceFramebuffer->getTexture(), toBox(targetRect), {.a = sharpAlpha});
+
+        if (blurredAlpha <= 0.002F)
+            continue;
+
+        constexpr std::size_t blurLevelCount = 4;
+        const float           blurLevel = std::clamp(blurStrength * static_cast<float>(blurLevelCount - 1), 0.0F, static_cast<float>(blurLevelCount - 1));
+        const auto            lowerIndex = static_cast<std::size_t>(std::floor(blurLevel));
+        const auto            upperIndex = std::min(blurLevelCount - 1, lowerIndex + 1);
+        const float           upperWeight = std::clamp(blurLevel - static_cast<float>(lowerIndex), 0.0F, 1.0F);
+        const float           lowerWeight = 1.0F - upperWeight;
+
+        const auto renderBlurLevel = [&](std::size_t index, float alpha) {
+            auto* blurredFramebuffer = index < proxy.blurredFramebuffers.size() && proxy.blurredFramebuffers[index] ? proxy.blurredFramebuffers[index].get() : nullptr;
+            if (!blurredFramebuffer || !blurredFramebuffer->isAllocated() || !blurredFramebuffer->getTexture() || alpha <= 0.002F)
+                return;
+            g_pHyprOpenGL->renderTexture(blurredFramebuffer->getTexture(), toBox(targetRect), {.a = alpha});
+        };
+
+        renderBlurLevel(lowerIndex, blurredAlpha * lowerWeight);
+        if (upperIndex != lowerIndex)
+            renderBlurLevel(upperIndex, blurredAlpha * upperWeight);
+    }
+}
+
 bool OverviewController::shouldSuppressSurfaceBlur(void* surfacePassThisptr) const {
     if (!isAnimating())
         return false;
@@ -4863,6 +5634,8 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
+    clearHiddenStripLayerProxies();
+    syncHiddenStripLayerProxies();
     setInputFollowMouseOverride(true);
     setScrollingFollowFocusOverride(true);
     setFullscreenRenderOverride(true);
@@ -4944,6 +5717,8 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     m_state.deferredFullscreenWorkspaceClear = false;
     m_state.deferredHiddenFullscreenReapply = false;
     m_deactivatePending = false;
+    clearHiddenStripLayerProxies();
+    syncHiddenStripLayerProxies();
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
@@ -5172,6 +5947,7 @@ void OverviewController::deactivate() {
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     clearPendingStripWorkspaceChange();
     clearStripWindowDragState();
+    clearHiddenStripLayerProxies();
     deactivateHooks();
     setFullscreenRenderOverride(false);
     restoreWorkspaceNameOverrides();
@@ -5747,6 +6523,7 @@ void OverviewController::rebuildVisibleState() {
     carryOverWorkspaceStripSnapshots(next, m_state);
     m_state = std::move(next);
     applyWorkspaceNameOverrides(m_state);
+    syncHiddenStripLayerProxies();
     refreshWorkspaceStripSnapshots();
     updateHoveredFromPointer(focusFollowsMouseEnabled(), false);
     damageOwnedMonitors();
