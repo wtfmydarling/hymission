@@ -66,7 +66,7 @@ class OverviewController {
     void handleMouseMove();
     bool handleMouseButton(const IPointer::SButtonEvent& event);
     void handleKeyboard(const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info);
-    void handleWindowSetChange(PHLWINDOW window);
+    void handleWindowSetChange(PHLWINDOW window, bool preferDeferredRebuild = false);
     void handleWorkspaceChange(PHLWORKSPACE workspace);
     void handleMonitorChange(PHLMONITOR monitor);
     bool                shouldRenderWindowHook(const PHLWINDOW& window, const PHLMONITOR& monitor);
@@ -470,6 +470,7 @@ class OverviewController {
     void                       syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true);
     void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true);
     void                       clearPendingWindowGeometryRetry();
+    void                       scheduleVisibleStateRebuild();
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -570,6 +571,8 @@ class OverviewController {
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
     PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
+    bool                      m_visibleStateRebuildScheduled = false;
+    std::size_t               m_visibleStateRebuildGeneration = 0;
     bool                      m_pendingWindowGeometryRetryScheduled = false;
     std::size_t               m_pendingWindowGeometryRetryRemaining = 0;
     std::size_t               m_pendingWindowGeometryRetryGeneration = 0;

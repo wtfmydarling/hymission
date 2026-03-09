@@ -1275,8 +1275,8 @@ bool OverviewController::initialize() {
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window); });
-    m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) { handleWindowSetChange(window); });
-    m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) { handleWindowSetChange(window); });
+    m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) { handleWindowSetChange(window, true); });
+    m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) { handleWindowSetChange(window, true); });
     m_windowMoveWorkspaceListener = events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE) { handleWindowSetChange(window); });
     m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE workspace) { handleWorkspaceChange(workspace); });
     m_monitorRemovedListener = events.monitor.removed.listen([this](PHLMONITOR monitor) { handleMonitorChange(monitor); });
@@ -1371,7 +1371,7 @@ void OverviewController::renderStage(eRenderStage stage) {
 
     if (!m_workspaceTransition.active && (m_state.phase == Phase::Opening || m_state.phase == Phase::Active) &&
         std::any_of(m_state.windows.begin(), m_state.windows.end(), [](const ManagedWindow& managed) { return managed.window && managed.window->m_fadingOut; })) {
-        rebuildVisibleState();
+        scheduleVisibleStateRebuild();
     }
 
     setFullscreenRenderOverride(true);
@@ -1651,7 +1651,7 @@ void OverviewController::handleKeyboard(const IKeyboard::SKeyEvent& event, Event
         info.cancelled = true;
 }
 
-void OverviewController::handleWindowSetChange(PHLWINDOW window) {
+void OverviewController::handleWindowSetChange(PHLWINDOW window, bool preferDeferredRebuild) {
     if (window && m_postCloseForcedFocusLatched && m_postCloseForcedFocus.lock() == window)
         clearPostCloseForcedFocus();
     if (window && m_pendingLiveFocusWorkspaceChangeTarget.lock() == window)
@@ -1672,10 +1672,17 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window) {
         return;
     }
 
+    const bool insideRenderLifecycle = m_surfaceRenderDataTransformDepth > 0 || m_stripSnapshotRenderDepth > 0 || (g_pHyprOpenGL && g_pHyprOpenGL->m_renderData.pMonitor);
+    const bool shouldDeferRebuild = preferDeferredRebuild || insideRenderLifecycle;
+
     if (m_workspaceTransition.active) {
-        clearOverviewWorkspaceTransition();
-        rebuildVisibleState();
-        updatePendingWindowGeometryRetry(window);
+        if (shouldDeferRebuild) {
+            scheduleVisibleStateRebuild();
+        } else {
+            clearOverviewWorkspaceTransition();
+            rebuildVisibleState();
+            updatePendingWindowGeometryRetry(window);
+        }
         return;
     }
 
@@ -1686,8 +1693,12 @@ void OverviewController::handleWindowSetChange(PHLWINDOW window) {
     }
 
     if (m_state.phase == Phase::Opening || m_state.phase == Phase::Active) {
-        rebuildVisibleState();
-        updatePendingWindowGeometryRetry(window);
+        if (shouldDeferRebuild) {
+            scheduleVisibleStateRebuild();
+        } else {
+            rebuildVisibleState();
+            updatePendingWindowGeometryRetry(window);
+        }
         return;
     }
 
@@ -5419,6 +5430,29 @@ void OverviewController::clearPendingWindowGeometryRetry() {
     ++m_pendingWindowGeometryRetryGeneration;
 }
 
+void OverviewController::scheduleVisibleStateRebuild() {
+    if (m_visibleStateRebuildScheduled)
+        return;
+
+    if (!g_pEventLoopManager) {
+        rebuildVisibleState();
+        return;
+    }
+
+    m_visibleStateRebuildScheduled = true;
+    const auto generation = ++m_visibleStateRebuildGeneration;
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || generation != m_visibleStateRebuildGeneration)
+            return;
+
+        m_visibleStateRebuildScheduled = false;
+        if (!isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
+            return;
+
+        rebuildVisibleState();
+    });
+}
+
 void OverviewController::schedulePendingWindowGeometryRetry(const PHLWINDOW& window) {
     if (!window || !g_pEventLoopManager || !isVisible() || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return;
@@ -5677,6 +5711,8 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
         return;
 
     clearPendingWindowGeometryRetry();
+    m_visibleStateRebuildScheduled = false;
+    ++m_visibleStateRebuildGeneration;
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
@@ -5751,6 +5787,8 @@ void OverviewController::beginClose(CloseMode mode, std::optional<double> fromVi
     const ScopedFlag beginCloseGuard(m_beginCloseInProgress);
 
     clearPendingWindowGeometryRetry();
+    m_visibleStateRebuildScheduled = false;
+    ++m_visibleStateRebuildGeneration;
 
     if (mode == CloseMode::Abort)
         clearPostCloseDispatcher();
@@ -6069,6 +6107,8 @@ void OverviewController::deactivate() {
     clearPostCloseDispatcher();
     m_deactivatePending = false;
     m_deactivateScheduled = false;
+    m_visibleStateRebuildScheduled = false;
+    ++m_visibleStateRebuildGeneration;
     m_postOpenRefreshFrames = 0;
     clearPendingWindowGeometryRetry();
     clearOverviewWorkspaceTransition();
