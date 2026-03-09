@@ -2,10 +2,12 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <hyprland/src/SharedDefs.hpp>
@@ -349,6 +351,7 @@ class OverviewController {
     [[nodiscard]] std::optional<ScopeOverride> parseScopeOverride(const std::string& args, std::string& error) const;
     [[nodiscard]] bool         expandSelectedWindowEnabled() const;
     [[nodiscard]] bool         focusFollowsMouseEnabled() const;
+    [[nodiscard]] bool         multiWorkspaceSortRecentFirstEnabled() const;
     [[nodiscard]] bool         gestureInvertVerticalEnabled() const;
     [[nodiscard]] bool         workspaceSwipeInvertEnabled() const;
     [[nodiscard]] bool         workspaceChangeKeepsOverviewEnabled() const;
@@ -479,6 +482,9 @@ class OverviewController {
     void                       refreshExitLayoutForFocus(const PHLWINDOW& window) const;
     void                       syncRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true);
     void                       syncFocusDuringOverviewFromSelection(bool syncScrollingSpot = true, const char* source = "?");
+    void                       recordWindowActivation(const PHLWINDOW& window, bool allowWhileVisible = false);
+    void                       pruneWindowActivationHistory(const PHLWINDOW& removedWindow = {});
+    [[nodiscard]] bool         shouldUseRecentWindowOrdering(const State& state) const;
     void                       queueSelectionRetargetDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true, const char* source = "?");
     void                       flushQueuedSelectionRetargetDuringOverview();
     void                       queueRealFocusDuringOverview(const PHLWINDOW& window, bool syncScrollingSpot = true, const char* source = "?");
@@ -586,6 +592,8 @@ class OverviewController {
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;
+    std::unordered_map<PHLWINDOW, std::uint64_t> m_windowMruSerials;
+    std::uint64_t            m_nextWindowMruSerial = 1;
     bool                      m_deactivatePending = false;
     bool                      m_deactivateScheduled = false;
     std::size_t               m_surfaceRenderDataTransformDepth = 0;
@@ -645,6 +653,7 @@ class OverviewController {
     CHyprSignalListener       m_windowOpenListener;
     CHyprSignalListener       m_windowDestroyListener;
     CHyprSignalListener       m_windowCloseListener;
+    CHyprSignalListener       m_windowActiveListener;
     CHyprSignalListener       m_windowMoveWorkspaceListener;
     CHyprSignalListener       m_workspaceActiveListener;
     CHyprSignalListener       m_monitorRemovedListener;

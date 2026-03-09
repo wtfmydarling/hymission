@@ -1366,8 +1366,15 @@ bool OverviewController::initialize() {
     });
     m_keyboardListener = events.input.keyboard.key.listen([this](const IKeyboard::SKeyEvent& event, Event::SCallbackInfo& info) { handleKeyboard(event, info); });
     m_windowOpenListener = events.window.open.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::General); });
-    m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::General, true); });
-    m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) { handleWindowSetChange(window, WindowSetChangeKind::General, true); });
+    m_windowDestroyListener = events.window.destroy.listen([this](PHLWINDOW window) {
+        pruneWindowActivationHistory(window);
+        handleWindowSetChange(window, WindowSetChangeKind::General, true);
+    });
+    m_windowCloseListener = events.window.close.listen([this](PHLWINDOW window) {
+        pruneWindowActivationHistory(window);
+        handleWindowSetChange(window, WindowSetChangeKind::General, true);
+    });
+    m_windowActiveListener = events.window.active.listen([this](PHLWINDOW window, Desktop::eFocusReason) { recordWindowActivation(window); });
     m_windowMoveWorkspaceListener =
         events.window.moveToWorkspace.listen([this](PHLWINDOW window, PHLWORKSPACE) { handleWindowSetChange(window, WindowSetChangeKind::MoveToWorkspace); });
     m_workspaceActiveListener = events.workspace.active.listen([this](PHLWORKSPACE workspace) { handleWorkspaceChange(workspace); });
@@ -1378,6 +1385,28 @@ bool OverviewController::initialize() {
     });
 
     return true;
+}
+
+void OverviewController::pruneWindowActivationHistory(const PHLWINDOW& removedWindow) {
+    if (removedWindow)
+        m_windowMruSerials.erase(removedWindow);
+
+    std::erase_if(m_windowMruSerials, [](const auto& entry) { return !entry.first || !entry.first->m_isMapped; });
+}
+
+void OverviewController::recordWindowActivation(const PHLWINDOW& window, bool allowWhileVisible) {
+    if (!window || !window->m_isMapped || window->isHidden())
+        return;
+
+    if (!allowWhileVisible && isVisible())
+        return;
+
+    pruneWindowActivationHistory();
+    m_windowMruSerials[window] = m_nextWindowMruSerial++;
+}
+
+bool OverviewController::shouldUseRecentWindowOrdering(const State& state) const {
+    return !state.collectionPolicy.onlyActiveWorkspace && multiWorkspaceSortRecentFirstEnabled();
 }
 
 SDispatchResult OverviewController::open(const std::string& args) {
@@ -2318,6 +2347,10 @@ bool OverviewController::expandSelectedWindowEnabled() const {
 
 bool OverviewController::focusFollowsMouseEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:overview_focus_follows_mouse", 1) != 0;
+}
+
+bool OverviewController::multiWorkspaceSortRecentFirstEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:multi_workspace_sort_recent_first", 0) != 0;
 }
 
 bool OverviewController::gestureInvertVerticalEnabled() const {
@@ -5446,6 +5479,7 @@ void OverviewController::commitOverviewExitFocus(const PHLWINDOW& window) {
     if (!alreadyFocused)
         focusWindowCompat(window, false, Desktop::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 
+    recordWindowActivation(window, true);
     (void)syncScrollingWorkspaceSpotOnWindow(window);
 
     if (m_animationsEnabledOverridden && g_pAnimationManager) {
@@ -6304,6 +6338,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
     clearOverviewWorkspaceTransition();
     m_workspaceSwipeGesture = {};
+    recordWindowActivation(Desktop::focusState()->window());
     const auto preferredSelectedWindow = expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{};
     State next = buildState(monitor, requestedScope, {}, false, false, preferredSelectedWindow);
     if (next.windows.empty() && next.stripEntries.empty()) {
@@ -8580,6 +8615,25 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         });
     }
 
+    const bool orderByRecentUse = !preserveExistingOrder && shouldUseRecentWindowOrdering(state);
+    if (orderByRecentUse && !m_windowMruSerials.empty()) {
+        std::stable_sort(candidates.begin(), candidates.end(), [&](const PHLWINDOW& lhs, const PHLWINDOW& rhs) {
+            const auto lhsIt = m_windowMruSerials.find(lhs);
+            const auto rhsIt = m_windowMruSerials.find(rhs);
+            const bool lhsKnown = lhsIt != m_windowMruSerials.end();
+            const bool rhsKnown = rhsIt != m_windowMruSerials.end();
+
+            if (lhsKnown != rhsKnown)
+                return lhsKnown;
+            if (!lhsKnown)
+                return false;
+            if (lhsIt->second != rhsIt->second)
+                return lhsIt->second > rhsIt->second;
+
+            return false;
+        });
+    }
+
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
     std::unordered_map<MONITORID, std::vector<std::size_t>> indexesByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
@@ -8646,7 +8700,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     std::vector<PHLMONITOR> activeParticipatingMonitors;
     MissionControlLayout engine;
     LayoutConfig config = loadLayoutConfig();
-    config.preserveInputOrder = preserveExistingOrder;
+    config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     for (const auto& candidateMonitor : state.participatingMonitors) {
         if (!candidateMonitor)

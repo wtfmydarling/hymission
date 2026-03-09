@@ -158,6 +158,7 @@ plugin {
 
         expand_selected_window = 0
         overview_focus_follows_mouse = 1
+        multi_workspace_sort_recent_first = 0
         gesture_invert_vertical = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
@@ -209,6 +210,7 @@ plugin {
 | --- | --- | --- | --- |
 | `expand_selected_window` | bool | `0` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
+| `multi_workspace_sort_recent_first` | bool | `0` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
