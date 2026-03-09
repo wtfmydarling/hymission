@@ -3159,7 +3159,7 @@ void OverviewController::updateOverviewWorkspaceSwipeGesture(double delta) {
     damageOwnedMonitors();
 
     if (gestureSwipeForeverEnabled() && std::abs(m_workspaceTransition.delta) >= m_workspaceTransition.distance - 0.5)
-        commitOverviewWorkspaceTransition(true);
+        requestOverviewWorkspaceTransitionCommit(true);
 }
 
 void OverviewController::endOverviewWorkspaceSwipeGesture(bool cancelled) {
@@ -3218,7 +3218,53 @@ void OverviewController::updateOverviewWorkspaceTransition() {
         return;
     }
 
-    commitOverviewWorkspaceTransition(false);
+    requestOverviewWorkspaceTransitionCommit(false);
+}
+
+void OverviewController::requestOverviewWorkspaceTransitionCommit(bool followGesture) {
+    if (!m_workspaceTransition.active)
+        return;
+
+    if (!(g_pHyprOpenGL && g_pHyprOpenGL->m_renderData.pMonitor)) {
+        commitOverviewWorkspaceTransition(followGesture);
+        return;
+    }
+
+    m_pendingWorkspaceTransitionCommitFollowGesture = m_pendingWorkspaceTransitionCommitFollowGesture || followGesture;
+    if (m_workspaceTransitionCommitScheduled)
+        return;
+    if (!g_pEventLoopManager) {
+        commitOverviewWorkspaceTransition(m_pendingWorkspaceTransitionCommitFollowGesture);
+        return;
+    }
+
+    m_workspaceTransitionCommitScheduled = true;
+    const auto generation = ++m_workspaceTransitionCommitGeneration;
+
+    if (debugLogsEnabled())
+        debugLog("[hymission] defer overview workspace transition commit until after render");
+
+    g_pEventLoopManager->doLater([this, generation] {
+        if (g_controller != this || generation != m_workspaceTransitionCommitGeneration)
+            return;
+
+        m_workspaceTransitionCommitScheduled = false;
+        if (!m_workspaceTransition.active)
+            return;
+
+        const bool followGesture = m_pendingWorkspaceTransitionCommitFollowGesture;
+        m_pendingWorkspaceTransitionCommitFollowGesture = false;
+
+        // Workspace transition commit mutates live workspace/window ownership.
+        // If a frame is still rendering, reschedule instead of tearing the render
+        // state mid-frame.
+        if (g_pHyprOpenGL && g_pHyprOpenGL->m_renderData.pMonitor) {
+            requestOverviewWorkspaceTransitionCommit(followGesture);
+            return;
+        }
+
+        commitOverviewWorkspaceTransition(followGesture);
+    });
 }
 
 void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
@@ -3252,16 +3298,18 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
     {
         ScopedFlag applyingWorkspaceTransitionCommit(m_applyingWorkspaceTransitionCommit);
 
+        transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
+
         if (oldWorkspace && oldWorkspace != targetWorkspace) {
             for (const auto& window : g_pCompositor->m_windows) {
                 if (!window || window->m_workspace != oldWorkspace || !window->m_pinned)
                     continue;
 
+                // Match Hyprland's native changeworkspace ordering: the monitor's
+                // active workspace flips first, then pinned windows follow.
                 window->layoutTarget()->assignToSpace(targetWorkspace->m_space);
             }
         }
-
-        transitionMonitor->changeWorkspace(targetWorkspace, true, true, true);
 
         // `internal=true` skips Hyprland's workspace IN animation, so the target
         // workspace can retain its old off-screen renderOffset (e.g. +/- one
@@ -3336,6 +3384,9 @@ void OverviewController::commitOverviewWorkspaceTransition(bool followGesture) {
 
 void OverviewController::clearOverviewWorkspaceTransition() {
     clearPendingWindowGeometryRetry();
+    m_workspaceTransitionCommitScheduled = false;
+    m_pendingWorkspaceTransitionCommitFollowGesture = false;
+    ++m_workspaceTransitionCommitGeneration;
     m_workspaceTransition = {};
 }
 
@@ -4903,6 +4954,13 @@ std::optional<Rect> OverviewController::workspaceTransitionRectForWindow(const P
     const double sourceOffset = -clampedDelta;
     const double targetOffset = sourceOffset + (clampedDelta < 0.0 ? -m_workspaceTransition.distance : m_workspaceTransition.distance);
     const double t = m_workspaceTransition.distance > 0.0 ? clampUnit(std::abs(clampedDelta) / m_workspaceTransition.distance) : 1.0;
+
+    if ((sourceManaged && sourceManaged->isPinned) || (targetManaged && targetManaged->isPinned)) {
+        if (sourceManaged && targetManaged)
+            return lerpRect(sourceManaged->targetGlobal, targetManaged->targetGlobal, t);
+
+        return sourceManaged ? sourceManaged->targetGlobal : targetManaged->targetGlobal;
+    }
 
     double sourceDx = 0.0;
     double sourceDy = 0.0;

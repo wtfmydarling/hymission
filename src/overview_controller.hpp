@@ -428,6 +428,7 @@ class OverviewController {
                                                                bool syntheticEmpty, WorkspaceTransitionMode mode);
     [[nodiscard]] bool         startOverviewWorkspaceTransitionByStep(const PHLMONITOR& monitor, int step, WorkspaceTransitionMode mode);
     void                       updateOverviewWorkspaceTransition();
+    void                       requestOverviewWorkspaceTransitionCommit(bool followGesture = false);
     void                       commitOverviewWorkspaceTransition(bool followGesture = false);
     void                       clearOverviewWorkspaceTransition();
     [[nodiscard]] SDispatchResult startOverviewWorkspaceTransitionForDispatcher(const std::string& args, bool currentMonitorOnly);
@@ -587,6 +588,9 @@ class OverviewController {
     std::vector<HiddenStripLayerProxy> m_hiddenStripLayerProxies;
     bool                     m_applyingWorkspaceTransitionCommit = false;
     bool                     m_rebuildVisibleStateAfterWorkspaceTransitionCommit = false;
+    bool                     m_workspaceTransitionCommitScheduled = false;
+    bool                     m_pendingWorkspaceTransitionCommitFollowGesture = false;
+    std::size_t              m_workspaceTransitionCommitGeneration = 0;
     bool                     m_beginCloseInProgress = false;
     std::size_t              m_stripSnapshotRenderDepth = 0;
     bool                     m_stripSnapshotsDirty = false;
