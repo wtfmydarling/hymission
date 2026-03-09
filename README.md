@@ -142,10 +142,10 @@ Example:
 ```conf
 plugin {
     hymission {
-        outer_padding_top = 48
-        outer_padding_right = 48
-        outer_padding_bottom = 48
-        outer_padding_left = 48
+        outer_padding_top = 92
+        outer_padding_right = 32
+        outer_padding_bottom = 32
+        outer_padding_left = 32
         row_spacing = 32
         column_spacing = 32
         min_window_length = 120
@@ -155,19 +155,24 @@ plugin {
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
 
-        overview_focus_follows_mouse = 0
+        overview_focus_follows_mouse = 1
         gesture_invert_vertical = 0
         one_workspace_per_row = 0
         only_active_workspace = 0
         only_active_monitor = 0
         show_special = 0
-        workspace_change_keeps_overview = 0
+        workspace_change_keeps_overview = 1
 
         workspace_strip_anchor = top
         workspace_strip_empty_mode = existing
-        workspace_strip_thickness = 144
+        workspace_strip_thickness = 160
         workspace_strip_gap = 24
         hide_bar_when_strip = 1
+        hide_bar_animation = 1
+        hide_bar_animation_blur = 1
+        hide_bar_animation_move_multiplier = 0.8
+        hide_bar_animation_scale_divisor = 1.1
+        hide_bar_animation_alpha_end = 0
         show_focus_indicator = 0
 
         debug_logs = 0
@@ -180,11 +185,11 @@ plugin {
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `outer_padding` | int | `48` | Legacy fallback for all four edge paddings. |
-| `outer_padding_top` | int | `48` | Top padding for the overview content area. |
-| `outer_padding_right` | int | `48` | Right padding for the overview content area. |
-| `outer_padding_bottom` | int | `48` | Bottom padding for the overview content area. |
-| `outer_padding_left` | int | `48` | Left padding for the overview content area. |
+| `outer_padding` | int | `32` | Legacy fallback for all four edge paddings. |
+| `outer_padding_top` | int | `92` | Top padding for the overview content area. |
+| `outer_padding_right` | int | `32` | Right padding for the overview content area. |
+| `outer_padding_bottom` | int | `32` | Bottom padding for the overview content area. |
+| `outer_padding_left` | int | `32` | Left padding for the overview content area. |
 | `row_spacing` | int | `32` | Vertical spacing between preview rows. |
 | `column_spacing` | int | `32` | Horizontal spacing between preview columns. |
 | `min_window_length` | int | `120` | Minimum edge length used before layout scoring. |
@@ -199,12 +204,12 @@ plugin {
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `overview_focus_follows_mouse` | bool | `0` | Keep the overview selection aligned with hover, and sync real focus when allowed. |
+| `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. |
 | `gesture_invert_vertical` | bool | `0` | Invert the plugin-managed vertical overview gesture direction. |
 | `only_active_workspace` | bool | `0` | Restrict the default scope to the active regular workspace per participating monitor. |
 | `only_active_monitor` | bool | `0` | Restrict the default scope to the monitor under the cursor. |
 | `show_special` | bool | `0` | Include currently visible special workspaces in the default scope. |
-| `workspace_change_keeps_overview` | bool | `0` | Keep overview open when switching workspaces in active-workspace scope. |
+| `workspace_change_keeps_overview` | bool | `1` | Keep overview open when switching workspaces in active-workspace scope. |
 | `show_focus_indicator` | bool | `0` | Render selected and hovered preview focus chrome. |
 
 ### Workspace strip options
@@ -213,13 +218,13 @@ plugin {
 | --- | --- | --- | --- |
 | `workspace_strip_anchor` | string | `top` | Strip anchor. Supports `top`, `left`, and `right`. |
 | `workspace_strip_empty_mode` | string | `existing` | Empty-workspace strip policy. `existing` only shows real workspaces; `continuous` inserts the next missing numbered workspace in each positive-id gap without expanding named-workspace spans. |
-| `workspace_strip_thickness` | int | `144` | Strip thickness. |
+| `workspace_strip_thickness` | int | `160` | Strip thickness. |
 | `workspace_strip_gap` | int | `24` | Gap between the strip and the main overview content. |
 | `hide_bar_when_strip` | bool | `1` | Replace matching exclusive bars with a short self-blur / slide / scale proxy handoff while the strip is shown. |
 | `hide_bar_animation` | bool | `1` | Enable the bar handoff animation. When disabled, matching bars hide/show instantly with the strip. |
 | `hide_bar_animation_blur` | bool | `1` | Enable blur during the bar handoff. When disabled, the handoff keeps alpha / move / scale only. |
-| `hide_bar_animation_move_multiplier` | float | `1.0` | Multiplier for how much the bar follows strip movement. Clamped to `0.0` - `2.0`. `1.0` matches full strip travel and `2.0` doubles it. |
-| `hide_bar_animation_scale_divisor` | float | `1.06` | Bar scale divisor at full strip reveal. A value of `n` means the proxy scales to `1 / n` of its original size at maximum. `1.0` disables scaling. |
+| `hide_bar_animation_move_multiplier` | float | `0.8` | Multiplier for how much the bar follows strip movement. Clamped to `0.0` - `2.0`. `1.0` matches full strip travel and `2.0` doubles it. |
+| `hide_bar_animation_scale_divisor` | float | `1.1` | Bar scale divisor at full strip reveal. A value of `n` means the proxy scales to `1 / n` of its original size at maximum. `1.0` disables scaling. |
 | `hide_bar_animation_alpha_end` | float | `0.0` | Final bar proxy alpha when the strip is fully revealed. Clamped to `0.0` - `1.0`. `0.0` fully fades out; higher values keep part of the bar visible. |
 
 The workspace strip is shown when the current overview scope displays only the active workspace.

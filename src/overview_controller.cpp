@@ -2098,7 +2098,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 }
 
 LayoutConfig OverviewController::loadLayoutConfig() const {
-    const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 48));
+    const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32));
     return {
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
@@ -2157,7 +2157,7 @@ std::optional<OverviewController::ScopeOverride> OverviewController::parseScopeO
 }
 
 bool OverviewController::focusFollowsMouseEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:overview_focus_follows_mouse", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:overview_focus_follows_mouse", 1) != 0;
 }
 
 bool OverviewController::gestureInvertVerticalEnabled() const {
@@ -2169,7 +2169,7 @@ bool OverviewController::workspaceSwipeInvertEnabled() const {
 }
 
 bool OverviewController::workspaceChangeKeepsOverviewEnabled() const {
-    return getConfigInt(m_handle, "plugin:hymission:workspace_change_keeps_overview", 0) != 0;
+    return getConfigInt(m_handle, "plugin:hymission:workspace_change_keeps_overview", 1) != 0;
 }
 
 bool OverviewController::hideBarsWhenStripShownEnabled() const {
@@ -2185,11 +2185,11 @@ bool OverviewController::hideBarAnimationBlurEnabled() const {
 }
 
 double OverviewController::hideBarAnimationMoveMultiplier() const {
-    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 1.0), 0.0, 2.0);
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_move_multiplier", 0.8), 0.0, 2.0);
 }
 
 double OverviewController::hideBarAnimationScaleDivisor() const {
-    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.06));
+    return std::max(1.0, getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_scale_divisor", 1.1));
 }
 
 double OverviewController::hideBarAnimationAlphaEnd() const {
@@ -2284,7 +2284,7 @@ WorkspaceStripEmptyMode OverviewController::workspaceStripEmptyMode() const {
 }
 
 double OverviewController::workspaceStripThickness(const PHLMONITOR& monitor) const {
-    const double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 144)));
+    const double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 160)));
     if (!monitor)
         return raw;
 

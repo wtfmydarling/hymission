@@ -34,11 +34,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pluginHandle = handle;
 
 #define CONF(name, value) HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:" name, {value})
-    CONF("outer_padding", 48L);
-    CONF("outer_padding_top", 48L);
-    CONF("outer_padding_right", 48L);
-    CONF("outer_padding_bottom", 48L);
-    CONF("outer_padding_left", 48L);
+    CONF("outer_padding", 32L);
+    CONF("outer_padding_top", 92L);
+    CONF("outer_padding_right", 32L);
+    CONF("outer_padding_bottom", 32L);
+    CONF("outer_padding_left", 32L);
     CONF("row_spacing", 32L);
     CONF("column_spacing", 32L);
     CONF("min_window_length", 120L);
@@ -47,20 +47,20 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("min_slot_scale", 0.10F);
     CONF("layout_scale_weight", 1.0F);
     CONF("layout_space_weight", 0.10F);
-    CONF("overview_focus_follows_mouse", 0L);
+    CONF("overview_focus_follows_mouse", 1L);
     CONF("gesture_invert_vertical", 0L);
     CONF("one_workspace_per_row", 0L);
     CONF("only_active_workspace", 0L);
     CONF("only_active_monitor", 0L);
     CONF("show_special", 0L);
-    CONF("workspace_change_keeps_overview", 0L);
-    CONF("workspace_strip_thickness", 144L);
+    CONF("workspace_change_keeps_overview", 1L);
+    CONF("workspace_strip_thickness", 160L);
     CONF("workspace_strip_gap", 24L);
     CONF("hide_bar_when_strip", 1L);
     CONF("hide_bar_animation", 1L);
     CONF("hide_bar_animation_blur", 1L);
-    CONF("hide_bar_animation_move_multiplier", 1.0F);
-    CONF("hide_bar_animation_scale_divisor", 1.06F);
+    CONF("hide_bar_animation_move_multiplier", 0.8F);
+    CONF("hide_bar_animation_scale_divisor", 1.1F);
     CONF("hide_bar_animation_alpha_end", 0.0F);
     CONF("show_focus_indicator", 0L);
     CONF("debug_logs", 0L);
