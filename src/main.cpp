@@ -62,6 +62,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("hide_bar_animation_move_multiplier", 0.8F);
     CONF("hide_bar_animation_scale_divisor", 1.1F);
     CONF("hide_bar_animation_alpha_end", 0.0F);
+    CONF("bar_single_mission_control", 0L);
     CONF("show_focus_indicator", 0L);
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);

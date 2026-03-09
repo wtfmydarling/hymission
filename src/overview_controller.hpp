@@ -352,6 +352,7 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationMoveMultiplier() const;
     [[nodiscard]] double       hideBarAnimationScaleDivisor() const;
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
+    [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
@@ -366,6 +367,9 @@ class OverviewController {
     [[nodiscard]] double       workspaceStripThickness(const PHLMONITOR& monitor) const;
     [[nodiscard]] double       workspaceStripGap() const;
     [[nodiscard]] bool         workspaceStripEnabled(const State& state) const;
+    [[nodiscard]] bool         isStripOnlyOverviewState(const State& state) const;
+    [[nodiscard]] bool         shouldContinuouslyRefreshWorkspaceStripSnapshots() const;
+    [[nodiscard]] bool         isCurrentActiveWorkspaceStripEntry(const WorkspaceStripEntry& entry) const;
     [[nodiscard]] int          resolveOverviewWorkspaceSwipeStep(eTrackpadGestureDirection direction, double totalDelta, double lastDelta) const;
     [[nodiscard]] bool         switchOverviewWorkspaceByStep(int step);
     [[nodiscard]] double       gestureSwipeDistance() const;

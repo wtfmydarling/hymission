@@ -127,6 +127,7 @@ constexpr double STRIP_LABEL_HEIGHT = 0.0;
 constexpr double STRIP_MIN_THUMB_LENGTH = 12.0;
 constexpr double RECOMMAND_STAGE_TRANSFER = 0.18;
 constexpr auto   MISSION_CONTROL_WORKSPACE_NAME = "Mission Control";
+constexpr auto   MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX = "__hymission_hidden__:";
 OverviewController* g_controller = nullptr;
 
 enum class GestureDispatcherKind : uint8_t {
@@ -1390,7 +1391,7 @@ void OverviewController::renderStage(eRenderStage stage) {
         }
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<OverviewOverlayPassElement>(this, monitor));
-        if (workspaceStripEnabled(m_state) && (m_state.phase == Phase::Opening || m_state.phase == Phase::Active) && !m_workspaceTransition.active) {
+        if (shouldContinuouslyRefreshWorkspaceStripSnapshots()) {
             m_stripSnapshotsDirty = true;
             scheduleWorkspaceStripSnapshotRefresh();
         }
@@ -2207,6 +2208,10 @@ double OverviewController::hideBarAnimationAlphaEnd() const {
     return std::clamp(getConfigFloat(m_handle, "plugin:hymission:hide_bar_animation_alpha_end", 0.0), 0.0, 1.0);
 }
 
+bool OverviewController::barSingleMissionControlEnabled() const {
+    return getConfigInt(m_handle, "plugin:hymission:bar_single_mission_control", 0) != 0;
+}
+
 bool OverviewController::showFocusIndicatorEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:show_focus_indicator", 0) != 0;
 }
@@ -2275,7 +2280,7 @@ bool OverviewController::shouldBlockWorkspaceSwitchInOverview() const {
 }
 
 bool OverviewController::shouldOverrideWorkspaceNames(const State& state) const {
-    return !state.collectionPolicy.onlyActiveWorkspace;
+    return barSingleMissionControlEnabled() && !state.collectionPolicy.onlyActiveWorkspace;
 }
 
 std::string OverviewController::workspaceStripAnchor() const {
@@ -2310,6 +2315,27 @@ double OverviewController::workspaceStripGap() const {
 
 bool OverviewController::workspaceStripEnabled(const State& state) const {
     return state.collectionPolicy.onlyActiveWorkspace && !state.suppressWorkspaceStrip;
+}
+
+bool OverviewController::isStripOnlyOverviewState(const State& state) const {
+    return workspaceStripEnabled(state) && state.windows.empty() && !state.stripEntries.empty();
+}
+
+bool OverviewController::shouldContinuouslyRefreshWorkspaceStripSnapshots() const {
+    if (!workspaceStripEnabled(m_state))
+        return false;
+
+    if ((m_state.phase != Phase::Opening && m_state.phase != Phase::Active) || m_workspaceTransition.active)
+        return false;
+
+    // Once overview has no managed previews left, keep the strip visible but
+    // stop re-rendering its snapshots every frame. The empty-state strip is
+    // stable until a real workspace/window/monitor change rebuilds it.
+    return !isStripOnlyOverviewState(m_state);
+}
+
+bool OverviewController::isCurrentActiveWorkspaceStripEntry(const WorkspaceStripEntry& entry) const {
+    return entry.monitor && entry.workspace && entry.monitor->m_activeWorkspace && entry.workspace == entry.monitor->m_activeWorkspace;
 }
 
 bool OverviewController::workspaceSwipeUsesVerticalAxis(const PHLWORKSPACE& workspace) const {
@@ -2420,17 +2446,49 @@ void OverviewController::applyWorkspaceNameOverrides(const State& state) {
     if (!shouldOverrideWorkspaceNames(state))
         return;
 
+    const auto backupAndRename = [&](const PHLWORKSPACE& workspace, const std::string& name) {
+        if (!workspace || workspace->m_name == name)
+            return;
+
+        const auto alreadyBackedUp = std::ranges::any_of(m_workspaceNameBackups, [&](const WorkspaceNameBackup& backup) { return backup.workspace == workspace; });
+        if (!alreadyBackedUp) {
+            m_workspaceNameBackups.push_back({
+                .workspace = workspace,
+                .name = workspace->m_name,
+            });
+        }
+
+        workspace->rename(name);
+    };
+
+    const bool collapseBar = barSingleMissionControlEnabled();
+    PHLWORKSPACE primaryWorkspace;
+    if (state.ownerMonitor && state.ownerMonitor->m_activeWorkspace && containsHandle(state.managedWorkspaces, state.ownerMonitor->m_activeWorkspace))
+        primaryWorkspace = state.ownerMonitor->m_activeWorkspace;
+
+    if (collapseBar && primaryWorkspace) {
+        for (const auto& workspace : state.managedWorkspaces) {
+            if (!workspace || workspace->m_isSpecialWorkspace || workspace == primaryWorkspace)
+                continue;
+
+            backupAndRename(workspace, std::string{MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX} + std::to_string(workspace->m_id));
+        }
+    }
+
     for (const auto& monitor : state.participatingMonitors) {
         if (!monitor || !monitor->m_activeWorkspace)
             continue;
 
-        if (containsHandle(state.managedWorkspaces, monitor->m_activeWorkspace)) {
-            m_workspaceNameBackups.push_back({
-                .workspace = monitor->m_activeWorkspace,
-                .name = monitor->m_activeWorkspace->m_name,
-            });
-            monitor->m_activeWorkspace->rename(MISSION_CONTROL_WORKSPACE_NAME);
+        if (!containsHandle(state.managedWorkspaces, monitor->m_activeWorkspace))
+            continue;
+
+        if (collapseBar && primaryWorkspace && monitor->m_activeWorkspace != primaryWorkspace) {
+            backupAndRename(monitor->m_activeWorkspace,
+                            std::string{MISSION_CONTROL_HIDDEN_WORKSPACE_PREFIX} + std::to_string(monitor->m_activeWorkspace->m_id));
+            continue;
         }
+
+        backupAndRename(monitor->m_activeWorkspace, MISSION_CONTROL_WORKSPACE_NAME);
     }
 }
 
@@ -4457,7 +4515,17 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
     if (!managed || !managed->targetMonitor || managed->targetMonitor != monitor)
         return std::nullopt;
 
-    const Rect current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
+    Rect current;
+    if (m_stripPreviewContext.active) {
+        // Strip thumbnails should snapshot the fully-open mini preview, not the
+        // main overview's current animation frame. In strip-only openings from
+        // an empty workspace, using the opening snapshot geometry leaves hidden
+        // workspaces at their off-screen render offsets and the thumbnail falls
+        // back to wallpaper-only until another refresh happens.
+        current = managed->targetGlobal;
+    } else {
+        current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
+    }
     const Rect actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
@@ -6919,16 +6987,15 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
 
     const auto monitor = entry.monitor;
     const auto targetWorkspace = entry.workspace ? entry.workspace : g_pCompositor->getWorkspaceByID(entry.workspaceId);
-    if (targetWorkspace && !renderWorkspaceFn)
-        return;
     if (!targetWorkspace && !entry.syntheticEmpty)
         return;
-
     auto snapshot = std::make_shared<WorkspaceStripEntry::Snapshot>();
     if (!snapshot->framebuffer.alloc(fbWidth, fbHeight))
         return;
+    setFramebufferLinearFiltering(snapshot->framebuffer);
 
     State previewState;
+    bool  renderWorkspaceContents = false;
     if (targetWorkspace) {
         const std::vector<WorkspaceOverride> workspaceOverrides = {{
             .monitorId = monitor->m_id,
@@ -6937,7 +7004,7 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
             .workspaceName = entry.workspaceName,
             .syntheticEmpty = false,
         }};
-        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, false);
+        previewState = buildState(monitor, ScopeOverride::OnlyCurrentWorkspace, workspaceOverrides, true, true);
         previewState.phase = Phase::Active;
         previewState.animationProgress = 1.0;
         previewState.animationFromVisual = 1.0;
@@ -6955,14 +7022,22 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
                     makeRect(managed.slot.target.x - previewOffset.x, managed.slot.target.y - previewOffset.y, managed.slot.target.width, managed.slot.target.height);
             }
         }
+
+        // Decide from the thumbnail's own preview build, not the outer strip's
+        // cached bookkeeping, whether this workspace still has content to draw.
+        renderWorkspaceContents = !previewState.windows.empty();
     }
+
+    // Once a real workspace has no non-fading window previews left, snapshot it
+    // as background-only so the strip does not freeze a close-animation frame.
+    if (renderWorkspaceContents && !renderWorkspaceFn)
+        return;
+    const bool targetIsCurrentWorkspace = isCurrentActiveWorkspaceStripEntry(entry);
 
     const auto previousWorkspace = monitor->m_activeWorkspace;
     const auto previousSpecialWorkspace = monitor->m_activeSpecialWorkspace;
     const bool previousBlockSurfaceFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockScreenShader = g_pHyprOpenGL->m_renderData.blockScreenShader;
-    const bool restoreSpecialWorkspace = targetWorkspace && previousWorkspace && targetWorkspace == previousWorkspace;
-    const bool restoreCurrentWorkspaceAnimation = targetWorkspace && previousWorkspace && targetWorkspace == previousWorkspace;
     bool targetVisibilityChanged = false;
     bool previousVisibilityChanged = false;
     bool targetAnimationActivated = false;
@@ -7020,10 +7095,26 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         }
     };
 
+    const auto renderBackgroundLayersIntoFramebuffer = [&](CFramebuffer& targetFramebuffer, const Time::steady_tp& now) -> bool {
+        const bool previousBlockScreenShaderLocal = g_pHyprOpenGL->m_renderData.blockScreenShader;
+        CRegion     fakeDamage{0, 0, static_cast<int>(std::lround(targetFramebuffer.m_size.x)), static_cast<int>(std::lround(targetFramebuffer.m_size.y))};
+        if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &targetFramebuffer)) {
+            g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShaderLocal;
+            return false;
+        }
+
+        g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+        g_pHyprOpenGL->clear(CHyprColor{0.05, 0.06, 0.08, 1.0});
+        renderBackgroundLayers(now);
+        g_pHyprRenderer->endRender();
+        g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShaderLocal;
+        return true;
+    };
+
     ++m_stripSnapshotRenderDepth;
     g_pHyprRenderer->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-    if (targetWorkspace) {
+    if (renderWorkspaceContents) {
         m_stripPreviewContext.active = true;
         m_stripPreviewContext.monitor = monitor;
         m_stripPreviewContext.state = std::move(previewState);
@@ -7031,17 +7122,20 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         applyFullscreenOverrideForState(m_stripPreviewContext.state, true);
     }
 
-    if (targetWorkspace && previousWorkspace && targetWorkspace != previousWorkspace && previousWorkspace->m_visible) {
+    // Rendering the current active workspace into a thumbnail can reuse the
+    // live monitor state directly. Avoid flipping active workspace / special
+    // workspace / desktop animation state for that path.
+    if (renderWorkspaceContents && targetWorkspace && previousWorkspace && !targetIsCurrentWorkspace && previousWorkspace->m_visible) {
         previousWorkspace->m_visible = false;
         previousVisibilityChanged = true;
         g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
         previousAnimationActivated = true;
     }
 
-    if (targetWorkspace)
+    if (renderWorkspaceContents && targetWorkspace && !targetIsCurrentWorkspace)
         monitor->m_activeSpecialWorkspace.reset();
 
-    if (targetWorkspace) {
+    if (renderWorkspaceContents && targetWorkspace && !targetIsCurrentWorkspace) {
         monitor->m_activeWorkspace = targetWorkspace;
         if (!targetWorkspace->m_visible) {
             targetWorkspace->m_visible = true;
@@ -7049,21 +7143,35 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         }
         g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
         targetAnimationActivated = true;
-        if (restoreSpecialWorkspace)
-            monitor->m_activeSpecialWorkspace = previousSpecialWorkspace;
     }
 
     const auto renderNow = Time::steadyNow();
-    CRegion     fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &snapshot->framebuffer);
-    g_pHyprOpenGL->clear(CHyprColor{0.05, 0.06, 0.08, 1.0});
-    renderBackgroundLayers(renderNow);
-    if (targetWorkspace && renderWorkspaceFn)
-        renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, CBox{0.0, 0.0, static_cast<double>(fbWidth), static_cast<double>(fbHeight)});
-    g_pHyprOpenGL->m_renderData.blockScreenShader = true;
-    g_pHyprRenderer->endRender();
-    g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
-    if (targetWorkspace) {
+    bool       renderedScaledBackgroundOnly = false;
+    if (!renderWorkspaceContents) {
+        const int backgroundFbWidth = std::max(1, static_cast<int>(std::ceil(static_cast<double>(monitor->m_size.x) * renderScaleForMonitor(monitor))));
+        const int backgroundFbHeight = std::max(1, static_cast<int>(std::ceil(static_cast<double>(monitor->m_size.y) * renderScaleForMonitor(monitor))));
+        CFramebuffer backgroundFramebuffer;
+        if (backgroundFramebuffer.alloc(backgroundFbWidth, backgroundFbHeight)) {
+            setFramebufferLinearFiltering(backgroundFramebuffer);
+            renderedScaledBackgroundOnly =
+                renderBackgroundLayersIntoFramebuffer(backgroundFramebuffer, renderNow) &&
+                blitFramebufferRegion(backgroundFramebuffer, snapshot->framebuffer, makeRect(0.0, 0.0, backgroundFramebuffer.m_size.x, backgroundFramebuffer.m_size.y),
+                                     makeRect(0.0, 0.0, snapshot->framebuffer.m_size.x, snapshot->framebuffer.m_size.y));
+        }
+    }
+
+    if (!renderedScaledBackgroundOnly) {
+        CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+        g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &snapshot->framebuffer);
+        g_pHyprOpenGL->clear(CHyprColor{0.05, 0.06, 0.08, 1.0});
+        renderBackgroundLayers(renderNow);
+        if (renderWorkspaceContents && targetWorkspace && renderWorkspaceFn)
+            renderWorkspaceFn(g_pHyprRenderer.get(), monitor, targetWorkspace, renderNow, CBox{0.0, 0.0, static_cast<double>(fbWidth), static_cast<double>(fbHeight)});
+        g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+        g_pHyprRenderer->endRender();
+        g_pHyprOpenGL->m_renderData.blockScreenShader = previousBlockScreenShader;
+    }
+    if (renderWorkspaceContents) {
         applyFullscreenOverrideForState(m_stripPreviewContext.state, false);
         m_stripPreviewContext.state = {};
         m_stripPreviewContext.framebufferSize = {};
@@ -7071,19 +7179,19 @@ void OverviewController::renderWorkspaceStripSnapshot(WorkspaceStripEntry& entry
         m_stripPreviewContext.active = false;
     }
 
-    if (targetAnimationActivated && !restoreCurrentWorkspaceAnimation)
+    if (targetAnimationActivated)
         g_pDesktopAnimationManager->startAnimation(targetWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
     if (targetVisibilityChanged && targetWorkspace)
         targetWorkspace->m_visible = false;
 
-    monitor->m_activeSpecialWorkspace = previousSpecialWorkspace;
-    monitor->m_activeWorkspace = previousWorkspace;
+    if (renderWorkspaceContents && !targetIsCurrentWorkspace) {
+        monitor->m_activeSpecialWorkspace = previousSpecialWorkspace;
+        monitor->m_activeWorkspace = previousWorkspace;
+    }
 
     if (previousVisibilityChanged && previousWorkspace)
         previousWorkspace->m_visible = true;
     if (previousAnimationActivated && previousWorkspace)
-        g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
-    if (restoreCurrentWorkspaceAnimation && previousWorkspace)
         g_pDesktopAnimationManager->startAnimation(previousWorkspace, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
 
     g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockSurfaceFeedback;

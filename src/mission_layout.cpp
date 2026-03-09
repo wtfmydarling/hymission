@@ -112,7 +112,42 @@ std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windo
     return prepared;
 }
 
-LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std::size_t numRows, const Rect& area, const LayoutConfig& config) {
+void finalizeCandidate(LayoutCandidate& candidate, const Rect& area, const LayoutConfig& config) {
+    if (candidate.rows.empty())
+        return;
+
+    candidate.maxColumns = 0;
+    candidate.gridWidth = 0.0;
+    candidate.gridHeight = 0.0;
+
+    for (const auto& row : candidate.rows) {
+        candidate.maxColumns = std::max(candidate.maxColumns, row.windows.size());
+        candidate.gridWidth = std::max(candidate.gridWidth, row.fullWidth);
+        candidate.gridHeight += row.fullHeight;
+    }
+
+    const double horizontalSpacing = static_cast<double>(candidate.maxColumns > 0 ? candidate.maxColumns - 1 : 0) * config.columnSpacing;
+    const double verticalSpacing = static_cast<double>(candidate.rows.size() > 0 ? candidate.rows.size() - 1 : 0) * config.rowSpacing;
+
+    const double horizontalScale = (area.width - horizontalSpacing) / std::max(1.0, candidate.gridWidth);
+    const double verticalScale = (area.height - verticalSpacing) / std::max(1.0, candidate.gridHeight);
+
+    candidate.layoutScale = clampLayoutScale(std::min(horizontalScale, verticalScale), config);
+
+    for (auto& row : candidate.rows) {
+        row.width = row.fullWidth * candidate.layoutScale + static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
+        row.height = row.fullHeight * candidate.layoutScale;
+    }
+
+    const double usedWidth = candidate.gridWidth * candidate.layoutScale + horizontalSpacing;
+    const double usedHeight = candidate.gridHeight * candidate.layoutScale + verticalSpacing;
+    const double areaPixels = std::max(1.0, area.width * area.height);
+    const double space = (usedWidth * usedHeight) / areaPixels;
+
+    candidate.score = candidate.layoutScale * config.layoutScaleWeight + space * config.layoutSpaceWeight;
+}
+
+LayoutCandidate buildRowCandidate(const std::vector<PreparedWindow>& prepared, std::size_t numRows, const Rect& area, const LayoutConfig& config) {
     LayoutCandidate candidate;
 
     if (config.forceRowGroups) {
@@ -138,34 +173,7 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
             row.fullHeight = std::max(row.fullHeight, window.scaledHeight);
         }
 
-        if (candidate.rows.empty())
-            return candidate;
-
-        for (const auto& row : candidate.rows) {
-            candidate.maxColumns = std::max(candidate.maxColumns, row.windows.size());
-            candidate.gridWidth = std::max(candidate.gridWidth, row.fullWidth);
-            candidate.gridHeight += row.fullHeight;
-        }
-
-        const double horizontalSpacing = static_cast<double>(candidate.maxColumns > 0 ? candidate.maxColumns - 1 : 0) * config.columnSpacing;
-        const double verticalSpacing = static_cast<double>(candidate.rows.size() > 0 ? candidate.rows.size() - 1 : 0) * config.rowSpacing;
-
-        const double horizontalScale = (area.width - horizontalSpacing) / std::max(1.0, candidate.gridWidth);
-        const double verticalScale = (area.height - verticalSpacing) / std::max(1.0, candidate.gridHeight);
-
-        candidate.layoutScale = clampLayoutScale(std::min(horizontalScale, verticalScale), config);
-
-        for (auto& row : candidate.rows) {
-            row.width = row.fullWidth * candidate.layoutScale + static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
-            row.height = row.fullHeight * candidate.layoutScale;
-        }
-
-        const double usedWidth = candidate.gridWidth * candidate.layoutScale + horizontalSpacing;
-        const double usedHeight = candidate.gridHeight * candidate.layoutScale + verticalSpacing;
-        const double areaPixels = std::max(1.0, area.width * area.height);
-        const double space = (usedWidth * usedHeight) / areaPixels;
-
-        candidate.score = candidate.layoutScale * config.layoutScaleWeight + space * config.layoutSpaceWeight;
+        finalizeCandidate(candidate, area, config);
         return candidate;
     }
 
@@ -210,28 +218,7 @@ LayoutCandidate buildCandidate(const std::vector<PreparedWindow>& prepared, std:
         }
     }
 
-    if (candidate.rows.empty())
-        return candidate;
-
-    const double horizontalSpacing = static_cast<double>(candidate.maxColumns > 0 ? candidate.maxColumns - 1 : 0) * config.columnSpacing;
-    const double verticalSpacing = static_cast<double>(candidate.rows.size() > 0 ? candidate.rows.size() - 1 : 0) * config.rowSpacing;
-
-    const double horizontalScale = (area.width - horizontalSpacing) / std::max(1.0, candidate.gridWidth);
-    const double verticalScale = (area.height - verticalSpacing) / std::max(1.0, candidate.gridHeight);
-
-    candidate.layoutScale = clampLayoutScale(std::min(horizontalScale, verticalScale), config);
-
-    for (auto& row : candidate.rows) {
-        row.width = row.fullWidth * candidate.layoutScale + static_cast<double>(row.windows.size() > 0 ? row.windows.size() - 1 : 0) * config.columnSpacing;
-        row.height = row.fullHeight * candidate.layoutScale;
-    }
-
-    const double usedWidth = candidate.gridWidth * candidate.layoutScale + horizontalSpacing;
-    const double usedHeight = candidate.gridHeight * candidate.layoutScale + verticalSpacing;
-    const double areaPixels = std::max(1.0, area.width * area.height);
-    const double space = (usedWidth * usedHeight) / areaPixels;
-
-    candidate.score = candidate.layoutScale * config.layoutScaleWeight + space * config.layoutSpaceWeight;
+    finalizeCandidate(candidate, area, config);
     return candidate;
 }
 
@@ -317,11 +304,11 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
     const auto prepared = prepareWindows(windows, inner, config);
 
     if (config.forceRowGroups)
-        return materializeSlots(buildCandidate(prepared, windows.size(), inner, config), inner, config);
+        return materializeSlots(buildRowCandidate(prepared, windows.size(), inner, config), inner, config);
 
     std::optional<LayoutCandidate> best;
     for (std::size_t numRows = 1; numRows <= prepared.size(); ++numRows) {
-        auto candidate = buildCandidate(prepared, numRows, inner, config);
+        auto candidate = buildRowCandidate(prepared, numRows, inner, config);
         if (candidate.rows.empty())
             continue;
 
