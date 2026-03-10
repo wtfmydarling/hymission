@@ -2129,20 +2129,6 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
     if (action == OverviewWorkspaceChangeAction::Ignore)
         return;
 
-    if (insideRenderLifecycle()) {
-        if (debugLogsEnabled()) {
-            std::ostringstream out;
-            out << "[hymission] defer workspace change handling until after render action="
-                << (action == OverviewWorkspaceChangeAction::Rebuild ? "rebuild" : "abort");
-            if (workspace)
-                out << " workspace=" << debugWorkspaceLabel(workspace);
-            debugLog(out.str());
-        }
-
-        scheduleWorkspaceChangeHandling(workspace);
-        return;
-    }
-
     if (liveFocusWorkspaceChange) {
         if (debugLogsEnabled()) {
             std::ostringstream out;
@@ -2178,6 +2164,20 @@ void OverviewController::handleWorkspaceChange(PHLWORKSPACE workspace) {
             debugLog(out.str());
         }
         clearPendingStripWorkspaceChange();
+    }
+
+    if (insideRenderLifecycle()) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] defer workspace change handling until after render action="
+                << (action == OverviewWorkspaceChangeAction::Rebuild ? "rebuild" : "abort");
+            if (workspace)
+                out << " workspace=" << debugWorkspaceLabel(workspace);
+            debugLog(out.str());
+        }
+
+        scheduleWorkspaceChangeHandling(workspace, action);
+        return;
     }
 
     if (action == OverviewWorkspaceChangeAction::Rebuild) {
@@ -6372,15 +6372,25 @@ void OverviewController::scheduleVisibleStateRebuild() {
     });
 }
 
-void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace) {
+void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action) {
     m_pendingWorkspaceChange = workspace;
+    m_pendingWorkspaceChangeAction = action;
 
     if (m_workspaceChangeHandlingScheduled)
         return;
 
     if (!g_pEventLoopManager) {
-        if (!insideRenderLifecycle() && workspace)
-            handleWorkspaceChange(workspace);
+        if (!insideRenderLifecycle()) {
+            if (action == OverviewWorkspaceChangeAction::Rebuild) {
+                if (m_workspaceTransition.active)
+                    clearOverviewWorkspaceTransition();
+                rebuildVisibleState();
+            } else {
+                beginClose(CloseMode::Abort);
+            }
+            m_pendingWorkspaceChange.reset();
+            m_pendingWorkspaceChangeAction.reset();
+        }
         return;
     }
 
@@ -6392,15 +6402,24 @@ void OverviewController::scheduleWorkspaceChangeHandling(const PHLWORKSPACE& wor
 
         m_workspaceChangeHandlingScheduled = false;
         const auto workspace = m_pendingWorkspaceChange.lock();
-        if (!workspace)
+        if (!workspace || !m_pendingWorkspaceChangeAction.has_value())
             return;
+        const auto action = *m_pendingWorkspaceChangeAction;
+        m_pendingWorkspaceChangeAction.reset();
 
         if (insideRenderLifecycle()) {
-            scheduleWorkspaceChangeHandling(workspace);
+            scheduleWorkspaceChangeHandling(workspace, action);
             return;
         }
 
-        handleWorkspaceChange(workspace);
+        if (action == OverviewWorkspaceChangeAction::Rebuild) {
+            if (m_workspaceTransition.active)
+                clearOverviewWorkspaceTransition();
+            rebuildVisibleState();
+            return;
+        }
+
+        beginClose(CloseMode::Abort);
     });
 }
 
@@ -6676,6 +6695,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     m_pendingWorkspaceChange.reset();
+    m_pendingWorkspaceChangeAction.reset();
     m_workspaceChangeHandlingScheduled = false;
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();
@@ -7031,6 +7051,7 @@ void OverviewController::deactivate() {
     m_queuedOverviewLiveFocusSyncScrollingSpot = false;
     m_pendingLiveFocusWorkspaceChangeTarget.reset();
     m_pendingWorkspaceChange.reset();
+    m_pendingWorkspaceChangeAction.reset();
     m_workspaceChangeHandlingScheduled = false;
     ++m_workspaceChangeHandlingGeneration;
     clearPendingStripWorkspaceChange();

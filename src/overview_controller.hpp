@@ -496,7 +496,7 @@ class OverviewController {
     void                       updateSelectedWindowLayout(const PHLWINDOW& previousSelectedWindow);
     void                       clearPendingWindowGeometryRetry();
     void                       scheduleVisibleStateRebuild();
-    void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace);
+    void                       scheduleWorkspaceChangeHandling(const PHLWORKSPACE& workspace, OverviewWorkspaceChangeAction action);
     void                       schedulePendingWindowGeometryRetry(const PHLWINDOW& window);
     void                       updatePendingWindowGeometryRetry(const PHLWINDOW& window);
     [[nodiscard]] bool         matchesPendingLiveFocusWorkspaceChange(const PHLWORKSPACE& workspace) const;
@@ -618,6 +618,7 @@ class OverviewController {
     PHLWINDOWREF              m_pendingLiveFocusWorkspaceChangeTarget;
     PHLWINDOWREF              m_pendingWindowGeometryRetryTarget;
     PHLWORKSPACEREF           m_pendingWorkspaceChange;
+    std::optional<OverviewWorkspaceChangeAction> m_pendingWorkspaceChangeAction;
     bool                      m_visibleStateRebuildScheduled = false;
     std::size_t               m_visibleStateRebuildGeneration = 0;
     bool                      m_workspaceChangeHandlingScheduled = false;
