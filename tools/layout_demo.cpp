@@ -290,6 +290,21 @@ std::vector<Scene> scenes() {
                     {.index = 15, .natural = {186, 216, 970, 349}, .label = "cluster 15"},
                 },
         },
+        {
+            .name = "flat-band",
+            .area = {0, 0, 2560, 1500},
+            .windows =
+                {
+                    {.index = 0, .natural = {40, 520, 720, 360}, .label = "left wide"},
+                    {.index = 1, .natural = {620, 430, 760, 160}, .label = "top strip"},
+                    {.index = 2, .natural = {760, 660, 560, 320}, .label = "middle doc"},
+                    {.index = 3, .natural = {1120, 560, 460, 420}, .label = "calendar"},
+                    {.index = 4, .natural = {1260, 760, 560, 380}, .label = "files"},
+                    {.index = 5, .natural = {1680, 740, 220, 430}, .label = "phone"},
+                    {.index = 6, .natural = {1960, 620, 560, 330}, .label = "right blank"},
+                    {.index = 7, .natural = {420, 720, 560, 320}, .label = "terminal"},
+                },
+        },
     };
 }
 

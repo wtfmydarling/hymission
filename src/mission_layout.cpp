@@ -51,10 +51,18 @@ struct NaturalItem {
 struct NaturalAnchorMap {
     double sourceCenterX = 0.0;
     double sourceCenterY = 0.0;
+    double sourceWidth = 1.0;
+    double sourceHeight = 1.0;
     double scale = 1.0;
 };
 
 struct NaturalOverlapOffset {
+    bool   active = false;
+    double x = 0.0;
+    double y = 0.0;
+};
+
+struct NaturalBandAnchor {
     bool   active = false;
     double x = 0.0;
     double y = 0.0;
@@ -380,7 +388,7 @@ bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
 
 NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepared, const Rect& area) {
     if (prepared.empty())
-        return {.sourceCenterX = area.centerX(), .sourceCenterY = area.centerY(), .scale = 1.0};
+        return {.sourceCenterX = area.centerX(), .sourceCenterY = area.centerY(), .sourceWidth = 1.0, .sourceHeight = 1.0, .scale = 1.0};
 
     double minX = std::numeric_limits<double>::infinity();
     double minY = std::numeric_limits<double>::infinity();
@@ -404,6 +412,8 @@ NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepar
     return {
         .sourceCenterX = (minX + maxX) / 2.0,
         .sourceCenterY = (minY + maxY) / 2.0,
+        .sourceWidth = sourceWidth,
+        .sourceHeight = sourceHeight,
         .scale = std::min(1.0, fitScale),
     };
 }
@@ -466,6 +476,64 @@ std::vector<NaturalOverlapOffset> buildNaturalOverlapOffsets(const std::vector<P
     return offsets;
 }
 
+std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<PreparedWindow>& prepared, const Rect& area) {
+    std::vector<NaturalBandAnchor> anchors(prepared.size());
+    const std::size_t              count = prepared.size();
+    if (count < 7)
+        return anchors;
+
+    const double aspect = area.width / std::max(1.0, area.height);
+    const auto   rows = static_cast<std::size_t>(std::clamp(std::round(std::sqrt(static_cast<double>(count) / std::max(1.0, aspect))), 2.0, 4.0));
+    const auto   columns = static_cast<std::size_t>(std::ceil(static_cast<double>(count) / static_cast<double>(rows)));
+    if (rows < 2 || columns == 0)
+        return anchors;
+
+    std::vector<std::size_t> ordered(count);
+    for (std::size_t i = 0; i < count; ++i)
+        ordered[i] = i;
+
+    std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t a, std::size_t b) {
+        const double ay = prepared[a].input.natural.centerY();
+        const double by = prepared[b].input.natural.centerY();
+        if (std::abs(ay - by) > 0.5)
+            return ay < by;
+        return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
+    });
+
+    const double usedWidth = area.width * 0.76;
+    const double usedHeight = area.height * std::clamp(0.58 + static_cast<double>(count) * 0.006, 0.58, 0.74);
+    const double left = area.centerX() - usedWidth / 2.0;
+    const double top = area.centerY() - usedHeight / 2.0;
+
+    for (std::size_t row = 0; row < rows; ++row) {
+        const std::size_t begin = row * columns;
+        const std::size_t end = std::min(count, begin + columns);
+        if (begin >= end)
+            break;
+
+        std::vector<std::size_t> band(ordered.begin() + static_cast<std::ptrdiff_t>(begin), ordered.begin() + static_cast<std::ptrdiff_t>(end));
+        std::stable_sort(band.begin(), band.end(), [&](std::size_t a, std::size_t b) {
+            const double ax = prepared[a].input.natural.centerX();
+            const double bx = prepared[b].input.natural.centerX();
+            if (std::abs(ax - bx) > 0.5)
+                return ax < bx;
+            return prepared[a].input.natural.centerY() < prepared[b].input.natural.centerY();
+        });
+
+        const double y = rows == 1 ? area.centerY() : top + usedHeight * (static_cast<double>(row) + 0.5) / static_cast<double>(rows);
+        for (std::size_t column = 0; column < band.size(); ++column) {
+            const double x = left + usedWidth * (static_cast<double>(column) + 0.5) / static_cast<double>(band.size());
+            anchors[band[column]] = {
+                .active = true,
+                .x = x,
+                .y = y,
+            };
+        }
+    }
+
+    return anchors;
+}
+
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
     const double gapX = std::max(0.0, config.columnSpacing * 0.25);
     const double gapY = std::max(0.0, config.rowSpacing * 0.25);
@@ -492,7 +560,13 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     const double     density = std::clamp((static_cast<double>(prepared.size()) - 6.0) / 24.0, 0.0, 1.0);
     const double     anchorSpread = lerp(0.62, 0.72, density);
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
+    const double     sourceAspect = anchorMap.sourceHeight / std::max(1.0, anchorMap.sourceWidth);
+    const double     areaAspect = area.height / std::max(1.0, area.width);
+    const double     flatness = std::clamp((areaAspect * 0.70 - sourceAspect) / std::max(0.001, areaAspect * 0.35), 0.0, 1.0);
+    const double     countBlend = std::clamp((static_cast<double>(prepared.size()) - 5.0) / 8.0, 0.0, 1.0);
+    const double     bandBlend = flatness * countBlend * 0.46;
     const auto       overlapOffsets = buildNaturalOverlapOffsets(prepared, area);
+    const auto       bandAnchors = buildNaturalBandAnchors(prepared, area);
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
 
@@ -505,6 +579,10 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
+        if (bandAnchors[order].active) {
+            anchorX = lerp(anchorX, bandAnchors[order].x, bandBlend);
+            anchorY = lerp(anchorY, bandAnchors[order].y, bandBlend);
+        }
         if (overlapOffsets[order].active) {
             anchorX += overlapOffsets[order].x;
             anchorY += overlapOffsets[order].y;
@@ -664,6 +742,50 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     }
 }
 
+void spreadNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.size() < 5)
+        return;
+
+    double minY = std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    double weightedY = 0.0;
+    double totalArea = 0.0;
+
+    for (const auto& slot : slots) {
+        minY = std::min(minY, slot.target.y);
+        maxY = std::max(maxY, slot.target.y + slot.target.height);
+        const double area = slot.target.width * slot.target.height;
+        weightedY += slot.target.centerY() * area;
+        totalArea += area;
+    }
+
+    const double boundsHeight = maxY - minY;
+    const double desiredHeight = area.height * std::clamp(0.54 + static_cast<double>(slots.size()) * 0.008, 0.54, 0.72);
+    if (boundsHeight >= desiredHeight || boundsHeight <= 1.0)
+        return;
+
+    const double centerY = totalArea > 0.0 ? weightedY / totalArea : (minY + maxY) / 2.0;
+    const double scale = std::min(1.7, desiredHeight / boundsHeight);
+
+    bool canApply = true;
+    for (const auto& slot : slots) {
+        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
+        const double y = std::floor(targetCenterY - slot.target.height / 2.0);
+        if (y < area.y || y + slot.target.height > area.y + area.height) {
+            canApply = false;
+            break;
+        }
+    }
+
+    if (!canApply)
+        return;
+
+    for (auto& slot : slots) {
+        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
+        slot.target.y = std::floor(targetCenterY - slot.target.height / 2.0);
+    }
+}
+
 std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, const Rect& area) {
     std::vector<WindowSlot> slots;
     slots.reserve(items.size());
@@ -681,6 +803,7 @@ std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, 
         return a.index < b.index;
     });
 
+    spreadNaturalTargets(slots, area);
     centerNaturalTargets(slots, area);
     return slots;
 }
