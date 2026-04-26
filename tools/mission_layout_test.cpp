@@ -234,6 +234,32 @@ int main() {
     {
         LayoutConfig config = deterministicConfig();
         config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 32.0;
+        config.columnSpacing = 32.0;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {900, 100, 360, 260}, .label = "right-top"},
+            {.index = 1, .natural = {980, 430, 360, 260}, .label = "right-bottom"},
+            {.index = 2, .natural = {1220, 270, 240, 240}, .label = "far-right"},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 1400, 900}, config);
+        ok &= expect(slots.size() == 3, "natural engine should keep right-biased windows");
+
+        double minX = 1400.0;
+        double maxX = 0.0;
+        for (const auto& slot : slots) {
+            minX = std::min(minX, slot.target.x);
+            maxX = std::max(maxX, slot.target.x + slot.target.width);
+        }
+
+        const double centerX = (minX + maxX) / 2.0;
+        ok &= expect(centerX > 560.0 && centerX < 840.0, "natural engine should center the final target cloud");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
         config.forceRowGroups = true;
 
         LayoutConfig gridConfig = config;

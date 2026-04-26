@@ -558,7 +558,43 @@ bool solveNaturalItems(std::vector<NaturalItem>& items, const Rect& area, const 
     return maxOverlap(items, config) < 1.0;
 }
 
-std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items) {
+void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.empty())
+        return;
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+
+    for (const auto& slot : slots) {
+        minX = std::min(minX, slot.target.x);
+        minY = std::min(minY, slot.target.y);
+        maxX = std::max(maxX, slot.target.x + slot.target.width);
+        maxY = std::max(maxY, slot.target.y + slot.target.height);
+    }
+
+    const double boundsWidth = maxX - minX;
+    const double boundsHeight = maxY - minY;
+    if (boundsWidth >= area.width && boundsHeight >= area.height)
+        return;
+
+    const double desiredDx = area.centerX() - (minX + maxX) / 2.0;
+    const double desiredDy = area.centerY() - (minY + maxY) / 2.0;
+    const double minDx = area.x - minX;
+    const double maxDx = area.x + area.width - maxX;
+    const double minDy = area.y - minY;
+    const double maxDy = area.y + area.height - maxY;
+    const double dx = boundsWidth < area.width ? std::clamp(desiredDx, minDx, maxDx) : 0.0;
+    const double dy = boundsHeight < area.height ? std::clamp(desiredDy, minDy, maxDy) : 0.0;
+
+    for (auto& slot : slots) {
+        slot.target.x = std::floor(slot.target.x + dx);
+        slot.target.y = std::floor(slot.target.y + dy);
+    }
+}
+
+std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, const Rect& area) {
     std::vector<WindowSlot> slots;
     slots.reserve(items.size());
 
@@ -575,6 +611,7 @@ std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items) 
         return a.index < b.index;
     });
 
+    centerNaturalTargets(slots, area);
     return slots;
 }
 
@@ -610,7 +647,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
     if (!best)
         return std::nullopt;
 
-    return materializeNaturalSlots(std::move(*best));
+    return materializeNaturalSlots(std::move(*best), area);
 }
 
 std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& prepared, const Rect& inner, const LayoutConfig& config) {
