@@ -9871,6 +9871,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     config.preserveInputOrder = preserveExistingOrder || orderByRecentUse;
     config.forceRowGroups = useWorkspaceRows;
     config.rankScaleByInputOrder = orderByRecentUse;
+    const bool allowDirectNiriOverviewLayout = state.collectionPolicy.onlyActiveWorkspace;
     const auto rowGroupForWindow = [&](const PHLWINDOW& window) -> std::size_t {
         if (!useWorkspaceRows)
             return 0;
@@ -9890,6 +9891,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     };
     const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal, const Rect& baseGlobal,
                                                std::size_t windowIndex, bool allowPinned) -> std::optional<WindowSlot> {
+        if (!allowDirectNiriOverviewLayout)
+            return std::nullopt;
+
         if (state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
             return std::nullopt;
 
