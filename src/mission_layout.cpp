@@ -38,6 +38,15 @@ struct LayoutCandidate {
     double           score = -std::numeric_limits<double>::infinity();
 };
 
+struct NaturalItem {
+    PreparedWindow window;
+    double         anchorX = 0.0;
+    double         anchorY = 0.0;
+    Rect           cell;
+    Rect           target;
+    double         scale = 1.0;
+};
+
 double clampPositive(double value) {
     return std::max(0.0, value);
 }
@@ -295,17 +304,227 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
     return slots;
 }
 
-} // namespace
+void clampRectToArea(Rect& rect, const Rect& area) {
+    if (rect.width >= area.width) {
+        rect.x = area.x + (area.width - rect.width) / 2.0;
+    } else {
+        rect.x = std::clamp(rect.x, area.x, area.x + area.width - rect.width);
+    }
 
-std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) const {
-    if (windows.empty())
-        return {};
+    if (rect.height >= area.height) {
+        rect.y = area.y + (area.height - rect.height) / 2.0;
+    } else {
+        rect.y = std::clamp(rect.y, area.y, area.y + area.height - rect.height);
+    }
+}
 
-    const Rect inner = insetArea(area, config);
-    const auto prepared = prepareWindows(windows, inner, config);
+double overlapAlong(double minA, double maxA, double minB, double maxB, double spacing) {
+    return std::min(maxA, maxB) - std::max(minA, minB) + spacing;
+}
 
+double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
+    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
+    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+    double       worst = 0.0;
+
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        for (std::size_t j = i + 1; j < items.size(); ++j) {
+            const Rect& a = items[i].cell;
+            const Rect& b = items[j].cell;
+            const double ox = overlapAlong(a.x, a.x + a.width, b.x, b.x + b.width, gapX);
+            const double oy = overlapAlong(a.y, a.y + a.height, b.y, b.y + b.height, gapY);
+            if (ox > 0.0 && oy > 0.0)
+                worst = std::max(worst, std::min(ox, oy));
+        }
+    }
+
+    return worst;
+}
+
+std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& prepared, const Rect& area, double baseScale, const LayoutConfig& config) {
+    std::vector<NaturalItem> items;
+    items.reserve(prepared.size());
+
+    constexpr double anchorSpread = 0.78;
+    const double     areaCenterX = area.centerX();
+    const double     areaCenterY = area.centerY();
+
+    for (const auto& window : prepared) {
+        const double scale = std::clamp(baseScale * window.weightScale, 0.0, normalizedMaxPreviewScale(config));
+        const double cellWidth = std::max(1.0, window.layoutWidth * scale);
+        const double cellHeight = std::max(1.0, window.layoutHeight * scale);
+        const double previewWidth = std::max(0.0, window.input.natural.width * scale);
+        const double previewHeight = std::max(0.0, window.input.natural.height * scale);
+
+        double anchorX = areaCenterX + (window.input.natural.centerX() - areaCenterX) * anchorSpread;
+        double anchorY = areaCenterY + (window.input.natural.centerY() - areaCenterY) * anchorSpread;
+        anchorX = std::clamp(anchorX, area.x + cellWidth / 2.0, area.x + area.width - cellWidth / 2.0);
+        anchorY = std::clamp(anchorY, area.y + cellHeight / 2.0, area.y + area.height - cellHeight / 2.0);
+
+        Rect cell{
+            anchorX - cellWidth / 2.0,
+            anchorY - cellHeight / 2.0,
+            cellWidth,
+            cellHeight,
+        };
+        clampRectToArea(cell, area);
+
+        Rect target{
+            cell.centerX() - previewWidth / 2.0,
+            cell.centerY() - previewHeight / 2.0,
+            previewWidth,
+            previewHeight,
+        };
+
+        items.push_back({
+            .window = window,
+            .anchorX = anchorX,
+            .anchorY = anchorY,
+            .cell = cell,
+            .target = target,
+            .scale = scale,
+        });
+    }
+
+    return items;
+}
+
+void updateNaturalTargets(std::vector<NaturalItem>& items) {
+    for (auto& item : items) {
+        item.target = {
+            std::floor(item.cell.centerX() - item.target.width / 2.0),
+            std::floor(item.cell.centerY() - item.target.height / 2.0),
+            item.target.width,
+            item.target.height,
+        };
+    }
+}
+
+bool solveNaturalItems(std::vector<NaturalItem>& items, const Rect& area, const LayoutConfig& config) {
+    if (items.empty())
+        return true;
+
+    const double gapX = std::max(0.0, config.columnSpacing * 0.25);
+    const double gapY = std::max(0.0, config.rowSpacing * 0.25);
+
+    for (int iteration = 0; iteration < 160; ++iteration) {
+        double maxMove = 0.0;
+
+        for (std::size_t i = 0; i < items.size(); ++i) {
+            for (std::size_t j = i + 1; j < items.size(); ++j) {
+                Rect& a = items[i].cell;
+                Rect& b = items[j].cell;
+
+                const double ox = overlapAlong(a.x, a.x + a.width, b.x, b.x + b.width, gapX);
+                const double oy = overlapAlong(a.y, a.y + a.height, b.y, b.y + b.height, gapY);
+                if (ox <= 0.0 || oy <= 0.0)
+                    continue;
+
+                double directionX = items[j].anchorX - items[i].anchorX;
+                double directionY = items[j].anchorY - items[i].anchorY;
+                if (std::abs(directionX) < 0.001 && std::abs(directionY) < 0.001) {
+                    directionX = static_cast<double>(j) - static_cast<double>(i);
+                    directionY = 0.0;
+                }
+
+                double moveX = 0.0;
+                double moveY = 0.0;
+                if (ox < oy) {
+                    const double dir = directionX < 0.0 ? -1.0 : 1.0;
+                    moveX = dir * (ox / 2.0 + 0.5);
+                } else {
+                    const double dir = directionY < 0.0 ? -1.0 : 1.0;
+                    moveY = dir * (oy / 2.0 + 0.5);
+                }
+
+                a.x -= moveX;
+                a.y -= moveY;
+                b.x += moveX;
+                b.y += moveY;
+                maxMove = std::max(maxMove, std::hypot(moveX, moveY));
+            }
+        }
+
+        for (auto& item : items) {
+            const double spring = iteration < 80 ? 0.025 : 0.010;
+            const double dx = (item.anchorX - item.cell.centerX()) * spring;
+            const double dy = (item.anchorY - item.cell.centerY()) * spring;
+            item.cell.x += dx;
+            item.cell.y += dy;
+            maxMove = std::max(maxMove, std::hypot(dx, dy));
+
+            const double beforeX = item.cell.x;
+            const double beforeY = item.cell.y;
+            clampRectToArea(item.cell, area);
+            maxMove = std::max(maxMove, std::hypot(item.cell.x - beforeX, item.cell.y - beforeY));
+        }
+
+        if (maxMove < 0.05 && maxOverlap(items, config) < 0.5)
+            break;
+    }
+
+    updateNaturalTargets(items);
+    return maxOverlap(items, config) < 1.0;
+}
+
+std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items) {
+    std::vector<WindowSlot> slots;
+    slots.reserve(items.size());
+
+    for (const auto& item : items) {
+        slots.push_back({
+            .index = item.window.input.index,
+            .natural = item.window.input.natural,
+            .target = item.target,
+            .scale = item.scale,
+        });
+    }
+
+    std::sort(slots.begin(), slots.end(), [](const WindowSlot& a, const WindowSlot& b) {
+        return a.index < b.index;
+    });
+
+    return slots;
+}
+
+std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.empty())
+        return std::vector<WindowSlot>{};
+
+    double maxWeight = 1.0;
+    for (const auto& window : prepared)
+        maxWeight = std::max(maxWeight, window.weightScale);
+
+    double lo = 0.0;
+    double hi = normalizedMaxPreviewScale(config) / maxWeight;
+    std::optional<std::vector<NaturalItem>> best;
+
+    for (int step = 0; step < 24; ++step) {
+        const double baseScale = (lo + hi) / 2.0;
+        auto         items = buildNaturalItems(prepared, area, baseScale, config);
+        if (solveNaturalItems(items, area, config)) {
+            lo = baseScale;
+            best = std::move(items);
+        } else {
+            hi = baseScale;
+        }
+    }
+
+    if (!best && normalizedMinSlotScale(config) <= 0.0) {
+        auto items = buildNaturalItems(prepared, area, 0.0, config);
+        if (solveNaturalItems(items, area, config))
+            best = std::move(items);
+    }
+
+    if (!best)
+        return std::nullopt;
+
+    return materializeNaturalSlots(std::move(*best));
+}
+
+std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& prepared, const Rect& inner, const LayoutConfig& config) {
     if (config.forceRowGroups)
-        return materializeSlots(buildRowCandidate(prepared, windows.size(), inner, config), inner, config);
+        return materializeSlots(buildRowCandidate(prepared, prepared.size(), inner, config), inner, config);
 
     std::optional<LayoutCandidate> best;
     for (std::size_t numRows = 1; numRows <= prepared.size(); ++numRows) {
@@ -321,6 +540,23 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
         return {};
 
     return materializeSlots(std::move(*best), inner, config);
+}
+
+} // namespace
+
+std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) const {
+    if (windows.empty())
+        return {};
+
+    const Rect inner = insetArea(area, config);
+    const auto prepared = prepareWindows(windows, inner, config);
+
+    if (config.engine == LayoutEngine::Natural && !config.forceRowGroups) {
+        if (auto natural = computeNaturalLayout(prepared, inner, config))
+            return *natural;
+    }
+
+    return computeGridLayout(prepared, inner, config);
 }
 
 } // namespace hymission

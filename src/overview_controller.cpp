@@ -224,6 +224,14 @@ std::string asciiLowerCopy(std::string value) {
     return value;
 }
 
+LayoutEngine parseLayoutEngine(std::string value) {
+    value = asciiLowerCopy(std::move(value));
+    if (value == "natural" || value == "apple" || value == "apple-like" || value == "expose" || value == "mission-control")
+        return LayoutEngine::Natural;
+
+    return LayoutEngine::Grid;
+}
+
 std::optional<uint32_t> switchReleaseModifierMask(const std::string& value) {
     const auto lowered = asciiLowerCopy(value);
     if (lowered == "shift" || lowered == "shift_l" || lowered == "shift_r")
@@ -2551,6 +2559,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 LayoutConfig OverviewController::loadLayoutConfig() const {
     const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32));
     return {
+        .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "grid")),
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
         .outerPaddingBottom = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_bottom", static_cast<long>(outerPadding))),
@@ -4164,15 +4173,18 @@ bool OverviewController::installHooks() {
         original = reinterpret_cast<OriginalT>(hook->m_original);
     };
 
-    if (!hookFunction("handleGesture", "CConfigManager::handleGesture(", m_handleGestureHook, reinterpret_cast<void*>(&hkHandleGesture))) {
-        notify("[hymission] failed to hook handleGesture", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+    if (hookFunction("handleGesture", "CConfigManager::handleGesture(", m_handleGestureHook, reinterpret_cast<void*>(&hkHandleGesture))) {
+        if (m_handleGestureHook->hook()) {
+            m_handleGestureOriginal = reinterpret_cast<HandleGestureFn>(m_handleGestureHook->m_original);
+        } else {
+            notify("[hymission] gesture config hook unavailable; dispatcher controls still work", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
+            HyprlandAPI::removeFunctionHook(m_handle, m_handleGestureHook);
+            m_handleGestureHook = nullptr;
+            m_handleGestureOriginal = nullptr;
+        }
+    } else {
+        notify("[hymission] gesture config hook not found; dispatcher controls still work", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
     }
-    if (!m_handleGestureHook->hook()) {
-        notify("[hymission] failed to activate handleGesture hook", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-    m_handleGestureOriginal = reinterpret_cast<HandleGestureFn>(m_handleGestureHook->m_original);
 
     if (!hookFunction("shouldRenderWindow",
                       "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",

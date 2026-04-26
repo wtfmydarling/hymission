@@ -36,7 +36,13 @@ struct WindowSlot {
     double      scale = 1.0;
 };
 
+enum class LayoutEngine {
+    Grid,
+    Natural,
+};
+
 struct LayoutConfig {
+    LayoutEngine engine = LayoutEngine::Grid;
     double outerPaddingTop = 48.0;
     double outerPaddingRight = 48.0;
     double outerPaddingBottom = 48.0;

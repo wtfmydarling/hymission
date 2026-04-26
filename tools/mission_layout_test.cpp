@@ -151,5 +151,51 @@ int main() {
                      "selected emphasis should keep previews non-overlapping");
     }
 
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 32.0;
+        config.columnSpacing = 32.0;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {40, 40, 520, 360}, .label = "top-left"},
+            {.index = 1, .natural = {520, 60, 440, 330}, .label = "top-right"},
+            {.index = 2, .natural = {90, 380, 500, 300}, .label = "bottom-left"},
+            {.index = 3, .natural = {570, 360, 410, 320}, .label = "bottom-right"},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 1000, 700}, config);
+        ok &= expect(slots.size() == 4, "natural engine should keep all windows");
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            for (std::size_t j = i + 1; j < slots.size(); ++j)
+                ok &= expect(!rectsOverlap(slots[i].target, slots[j].target), "natural engine should keep previews non-overlapping");
+        }
+        ok &= expect(slots[0].target.centerX() < slots[1].target.centerX() && slots[2].target.centerX() < slots[3].target.centerX(),
+                     "natural engine should preserve left/right spatial memory");
+        ok &= expect(slots[0].target.centerY() < slots[2].target.centerY() && slots[1].target.centerY() < slots[3].target.centerY(),
+                     "natural engine should preserve top/bottom spatial memory");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
+        config.forceRowGroups = true;
+
+        LayoutConfig gridConfig = config;
+        gridConfig.engine = LayoutEngine::Grid;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {0, 0, 240, 180}, .label = "a", .rowGroup = 0},
+            {.index = 1, .natural = {260, 0, 240, 180}, .label = "b", .rowGroup = 0},
+            {.index = 2, .natural = {0, 220, 240, 180}, .label = "c", .rowGroup = 1},
+        };
+
+        const auto naturalSlots = engine.compute(windows, {0, 0, 700, 500}, config);
+        const auto gridSlots = engine.compute(windows, {0, 0, 700, 500}, gridConfig);
+        ok &= expect(naturalSlots.size() == gridSlots.size(), "natural engine should preserve row-group fallback cardinality");
+        for (std::size_t i = 0; i < naturalSlots.size() && i < gridSlots.size(); ++i)
+            ok &= expectSlot(naturalSlots[i], gridSlots[i].target, gridSlots[i].scale, "row-group fallback should use the grid layout");
+    }
+
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -71,6 +71,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);
 #undef CONF
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:layout_engine", Hyprlang::STRING{"grid"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"left"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_empty_mode", Hyprlang::STRING{"existing"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:switch_release_key", Hyprlang::STRING{"Super_L"});

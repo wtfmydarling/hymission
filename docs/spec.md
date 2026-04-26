@@ -98,7 +98,7 @@ v1 overview 排除：
 
 ### 4.3 当前默认算法
 
-v1 默认布局算法固定为 row-based strategy：
+v1 默认布局算法为 row-based strategy；`layout_engine = natural` 时可切换到 Apple-like 自然求解器：
 
 - 小窗口先做最小边长钳制
 - 根据窗口相对 monitor 高度决定 small-window boost
@@ -113,6 +113,13 @@ v1 默认布局算法固定为 row-based strategy：
 - `layout_space_weight` 次之
 
 这意味着 v1 默认偏向更大的 preview，而不是机械追求铺满屏幕。
+
+Natural engine 额外目标：
+
+- 以窗口进入 overview 前的中心点作为弱锚点
+- 通过缩放二分和局部排斥消除重叠
+- 尽量保持原始 left/right/top/bottom 相对方位
+- 在无法满足自然排布或强制 workspace 行分组时回退到 row-based strategy
 
 可选配置补充：
 
@@ -295,6 +302,7 @@ workspace 切换补充语义：
 - `small_window_boost`
 - `max_preview_scale`
 - `min_slot_scale`
+- `layout_engine`
 - `layout_scale_weight`
 - `layout_space_weight`
 - `expand_selected_window`
@@ -314,7 +322,8 @@ workspace 切换补充语义：
 约束：
 
 - 旧配置 `outer_padding` 允许继续作为统一回退值存在，但新的方向配置优先级更高
-- `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
+- `outer_padding*`、`row_spacing`、`column_spacing`、`min_window_length`、`small_window_boost`、`max_preview_scale`、`min_slot_scale`、`layout_engine`、`layout_scale_weight`、`layout_space_weight` 当前只控制布局算法
+- `layout_engine = grid` 保持既有 row-search 几何；`layout_engine = natural` / `apple` / `expose` / `mission-control` 使用 Apple-like 自然求解器，优先保留窗口进入 overview 前的相对方位并消除重叠；`one_workspace_per_row = 1` 时仍使用行分组布局以保留 workspace 行语义
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
