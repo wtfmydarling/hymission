@@ -2859,7 +2859,7 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
         .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
         .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
-        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.02),
+        .naturalScaleFlex = getConfigFloat(m_handle, "plugin:hymission:natural_scale_flex", 0.12),
     };
 }
 
@@ -9770,7 +9770,6 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     }
 
     std::unordered_map<MONITORID, std::vector<WindowInput>> inputsByMonitor;
-    std::unordered_map<MONITORID, std::vector<std::size_t>> indexesByMonitor;
     std::unordered_map<MONITORID, std::size_t> directNiriOverviewWindowsByMonitor;
     const bool useWorkspaceRows = workspaceRowsEnabled(m_handle);
     LayoutConfig config = loadLayoutConfig();
@@ -9939,7 +9938,6 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             .rowGroup = rowGroupForWindow(window),
             .layoutEmphasis = 1.0,
         });
-        indexesByMonitor[targetMonitor->m_id].push_back(windowIndex);
     }
 
     std::vector<PHLMONITOR> activeParticipatingMonitors;
@@ -9965,15 +9963,19 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             engine.compute(inputsIt->second,
                            previewArea,
                            config);
-        const auto& indexes = indexesByMonitor[candidateMonitor->m_id];
-        for (std::size_t slotIndex = 0; slotIndex < slots.size() && slotIndex < indexes.size(); ++slotIndex) {
-            const std::size_t windowIndex = indexes[slotIndex];
-            state.windows[windowIndex].slot = slots[slotIndex];
-            state.windows[windowIndex].targetGlobal =
-                makeRect(candidateMonitor->m_position.x + slots[slotIndex].target.x, candidateMonitor->m_position.y + slots[slotIndex].target.y, slots[slotIndex].target.width,
-                         slots[slotIndex].target.height);
-            state.windows[windowIndex].relayoutFromGlobal = state.windows[windowIndex].targetGlobal;
-            state.slots.push_back(slots[slotIndex]);
+        for (const auto& slot : slots) {
+            if (slot.index >= state.windows.size())
+                continue;
+
+            auto& managed = state.windows[slot.index];
+            if (managed.targetMonitor != candidateMonitor)
+                continue;
+
+            managed.slot = slot;
+            managed.targetGlobal =
+                makeRect(candidateMonitor->m_position.x + slot.target.x, candidateMonitor->m_position.y + slot.target.y, slot.target.width, slot.target.height);
+            managed.relayoutFromGlobal = managed.targetGlobal;
+            state.slots.push_back(slot);
         }
     }
 

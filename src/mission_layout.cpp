@@ -195,7 +195,10 @@ std::vector<PreparedWindow> applyNaturalScaleFlex(std::vector<PreparedWindow> pr
     if (prepared.size() < 2)
         return prepared;
 
-    const double countScale = config.rankScaleByInputOrder ? std::clamp(12.0 / static_cast<double>(prepared.size()), 0.25, 1.0) : 0.10;
+    if (config.rankScaleByInputOrder)
+        return prepared;
+
+    const double countScale = 0.10;
     const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25) * countScale;
     if (flex <= 0.0)
         return prepared;
@@ -908,18 +911,42 @@ void shrinkSlotScale(WindowSlot& slot, double scale, const Rect& area, const Lay
     clampRectToArea(slot.target, area);
 }
 
-void enforceInputOrderScaleGradient(std::vector<WindowSlot>& slots, const Rect& area, const LayoutConfig& config) {
+void enforceInputOrderScaleGradient(std::vector<WindowSlot>& slots,
+                                    const std::vector<PreparedWindow>& prepared,
+                                    const Rect&                        area,
+                                    const LayoutConfig&                config) {
     if (!config.rankScaleByInputOrder || slots.size() < 2)
         return;
 
+    const double flex = std::clamp(config.naturalScaleFlex, 0.0, 0.25);
+    if (flex <= 0.0)
+        return;
+
+    std::vector<WindowSlot*> ordered;
+    ordered.reserve(prepared.size());
+    for (const auto& window : prepared) {
+        const auto it = std::find_if(slots.begin(), slots.end(), [&](const WindowSlot& slot) {
+            return slot.index == window.input.index;
+        });
+        if (it != slots.end())
+            ordered.push_back(&*it);
+    }
+
+    if (ordered.size() < 2)
+        return;
+
+    const double denom = std::max(1.0, static_cast<double>(ordered.size() - 1));
     double previousScale = std::numeric_limits<double>::infinity();
-    for (auto& slot : slots) {
-        if (std::isfinite(previousScale) && slot.scale >= previousScale) {
-            const double nextScale = std::max(normalizedMinSlotScale(config), previousScale * 0.995);
-            shrinkSlotScale(slot, nextScale, area, config);
-        }
+    for (std::size_t order = 0; order < ordered.size(); ++order) {
+        auto& slot = *ordered[order];
+        double targetScale = slot.scale * (1.0 - flex * static_cast<double>(order) / denom);
+        if (std::isfinite(previousScale))
+            targetScale = std::min(targetScale, previousScale * 0.995);
+        shrinkSlotScale(slot, targetScale, area, config);
         previousScale = slot.scale;
     }
+
+    centerNaturalTargets(slots, area);
 }
 
 double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area) {
@@ -1084,7 +1111,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
         if (candidate.empty())
             return;
 
-        enforceInputOrderScaleGradient(candidate, area, config);
+        enforceInputOrderScaleGradient(candidate, prepared, area, config);
         const double cost = naturalVisualCost(candidate, area) + costBias;
         if (!bestSlots || cost < bestCost) {
             bestCost = cost;
