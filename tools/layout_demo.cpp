@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -34,6 +35,7 @@ struct Options {
     std::optional<std::string> outputPath;
     std::size_t              stressCases = 0;
     unsigned                 seed = 0xC0FFEE;
+    double                   minPreviewShortEdge = 32.0;
     bool                     forceRowGroups = false;
     bool                     listScenes = false;
     bool                     help = false;
@@ -44,6 +46,8 @@ struct LayoutMetrics {
     double outOfBoundsArea = 0.0;
     double minScale = std::numeric_limits<double>::infinity();
     double averageScale = 0.0;
+    double minShortEdge = std::numeric_limits<double>::infinity();
+    double averageShortEdge = 0.0;
     double targetAreaRatio = 0.0;
     double targetCentroidX = 0.0;
     double targetCentroidY = 0.0;
@@ -185,6 +189,79 @@ std::vector<Scene> scenes() {
                     {.index = 3, .natural = {700, 500, 420, 320}, .label = "WS2 right", .rowGroup = 1},
                 },
         },
+        {
+            .name = "extreme-aspect",
+            .area = {0, 0, 1126, 692},
+            .windows =
+                {
+                    {.index = 0, .natural = {-143, 143, 1451, 49}, .label = "wide strip 0"},
+                    {.index = 1, .natural = {-186, -1, 52, 656}, .label = "tall strip 1"},
+                    {.index = 2, .natural = {589, 672, 1488, 72}, .label = "wide strip 2"},
+                    {.index = 3, .natural = {335, 316, 104, 773}, .label = "tall strip 3"},
+                    {.index = 4, .natural = {873, 230, 1358, 147}, .label = "wide strip 4"},
+                    {.index = 5, .natural = {255, 264, 99, 432}, .label = "tall strip 5"},
+                    {.index = 6, .natural = {781, 558, 1412, 149}, .label = "wide strip 6"},
+                    {.index = 7, .natural = {879, 50, 102, 765}, .label = "tall strip 7"},
+                    {.index = 8, .natural = {1076, 571, 938, 74}, .label = "wide strip 8"},
+                    {.index = 9, .natural = {-83, -15, 102, 712}, .label = "tall strip 9"},
+                    {.index = 10, .natural = {990, 214, 1346, 56}, .label = "wide strip 10"},
+                    {.index = 11, .natural = {427, 339, 125, 484}, .label = "tall strip 11"},
+                },
+        },
+        {
+            .name = "many-small-24",
+            .area = {0, 0, 1249, 815},
+            .windows =
+                {
+                    {.index = 0, .natural = {697, 362, 65, 141}, .label = "small 0"},
+                    {.index = 1, .natural = {1057, 666, 130, 131}, .label = "small 1"},
+                    {.index = 2, .natural = {-101, 437, 87, 159}, .label = "small 2"},
+                    {.index = 3, .natural = {576, -36, 225, 124}, .label = "small 3"},
+                    {.index = 4, .natural = {1025, 271, 183, 103}, .label = "small 4"},
+                    {.index = 5, .natural = {644, 533, 51, 125}, .label = "small 5"},
+                    {.index = 6, .natural = {667, 95, 228, 189}, .label = "small 6"},
+                    {.index = 7, .natural = {595, 53, 226, 36}, .label = "small 7"},
+                    {.index = 8, .natural = {1042, 360, 231, 64}, .label = "small 8"},
+                    {.index = 9, .natural = {380, 214, 81, 206}, .label = "small 9"},
+                    {.index = 10, .natural = {378, 297, 166, 121}, .label = "small 10"},
+                    {.index = 11, .natural = {720, 191, 27, 208}, .label = "small 11"},
+                    {.index = 12, .natural = {358, -22, 58, 100}, .label = "small 12"},
+                    {.index = 13, .natural = {164, 361, 80, 162}, .label = "small 13"},
+                    {.index = 14, .natural = {42, 17, 222, 125}, .label = "small 14"},
+                    {.index = 15, .natural = {231, 670, 108, 150}, .label = "small 15"},
+                    {.index = 16, .natural = {529, 528, 201, 173}, .label = "small 16"},
+                    {.index = 17, .natural = {641, -71, 77, 74}, .label = "small 17"},
+                    {.index = 18, .natural = {1027, 128, 190, 160}, .label = "small 18"},
+                    {.index = 19, .natural = {217, 345, 178, 120}, .label = "small 19"},
+                    {.index = 20, .natural = {575, 59, 218, 32}, .label = "small 20"},
+                    {.index = 21, .natural = {1168, 94, 36, 208}, .label = "small 21"},
+                    {.index = 22, .natural = {1120, 36, 35, 110}, .label = "small 22"},
+                    {.index = 23, .natural = {915, 1, 235, 79}, .label = "small 23"},
+                },
+        },
+        {
+            .name = "mixed-cluster-16",
+            .area = {0, 0, 931, 997},
+            .windows =
+                {
+                    {.index = 0, .natural = {462, 626, 574, 88}, .label = "cluster 0"},
+                    {.index = 1, .natural = {388, 518, 239, 1008}, .label = "cluster 1"},
+                    {.index = 2, .natural = {194, 604, 350, 158}, .label = "cluster 2"},
+                    {.index = 3, .natural = {253, 398, 570, 312}, .label = "cluster 3"},
+                    {.index = 4, .natural = {575, 440, 329, 684}, .label = "cluster 4"},
+                    {.index = 5, .natural = {335, 493, 247, 181}, .label = "cluster 5"},
+                    {.index = 6, .natural = {463, 539, 975, 267}, .label = "cluster 6"},
+                    {.index = 7, .natural = {324, 429, 249, 826}, .label = "cluster 7"},
+                    {.index = 8, .natural = {530, 408, 204, 255}, .label = "cluster 8"},
+                    {.index = 9, .natural = {460, 577, 746, 106}, .label = "cluster 9"},
+                    {.index = 10, .natural = {442, 332, 126, 949}, .label = "cluster 10"},
+                    {.index = 11, .natural = {520, 580, 282, 175}, .label = "cluster 11"},
+                    {.index = 12, .natural = {313, 274, 779, 157}, .label = "cluster 12"},
+                    {.index = 13, .natural = {622, 600, 106, 953}, .label = "cluster 13"},
+                    {.index = 14, .natural = {585, 448, 216, 141}, .label = "cluster 14"},
+                    {.index = 15, .natural = {186, 216, 970, 349}, .label = "cluster 15"},
+                },
+        },
     };
 }
 
@@ -205,6 +282,7 @@ LayoutConfig demoConfig(const Options& options) {
     config.outerPaddingLeft = 32.0;
     config.rowSpacing = 32.0;
     config.columnSpacing = 32.0;
+    config.minPreviewShortEdge = options.minPreviewShortEdge;
     config.forceRowGroups = options.forceRowGroups;
     return config;
 }
@@ -226,6 +304,7 @@ void printUsage(const char* argv0) {
               << "  --scene NAME                Built-in scene. Default: forceall\n"
               << "  --output PATH.svg           Render an SVG visual diff\n"
               << "  --width PX --height PX      Override scene monitor size\n"
+              << "  --min-preview-short-edge PX Minimum preview short edge. Default: 32\n"
               << "  --stress COUNT              Run random pathological cases and report the worst one\n"
               << "  --seed N                    Seed for --stress. Default: 12648430\n"
               << "  --force-row-groups          Enable row-group fallback behavior\n"
@@ -258,6 +337,8 @@ Options parseOptions(int argc, char** argv, Scene& scene) {
             widthOverride = parseDouble(requireValue("--width"), "--width");
         } else if (arg == "--height") {
             heightOverride = parseDouble(requireValue("--height"), "--height");
+        } else if (arg == "--min-preview-short-edge") {
+            options.minPreviewShortEdge = parseDouble(requireValue("--min-preview-short-edge"), "--min-preview-short-edge");
         } else if (arg == "--stress") {
             options.stressCases = parseSize(requireValue("--stress"), "--stress");
         } else if (arg == "--seed") {
@@ -360,8 +441,11 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
     for (std::size_t i = 0; i < slots.size(); ++i) {
         const auto* window = findWindow(windows, slots[i].index);
         const double slotArea = slots[i].target.width * slots[i].target.height;
+        const double shortEdge = std::min(slots[i].target.width, slots[i].target.height);
         metrics.minScale = std::min(metrics.minScale, slots[i].scale);
         metrics.averageScale += slots[i].scale;
+        metrics.minShortEdge = std::min(metrics.minShortEdge, shortEdge);
+        metrics.averageShortEdge += shortEdge;
         totalTargetArea += slotArea;
         weightedX += slots[i].target.centerX() * slotArea;
         weightedY += slots[i].target.centerY() * slotArea;
@@ -392,9 +476,11 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
 
     if (!slots.empty()) {
         metrics.averageScale /= static_cast<double>(slots.size());
+        metrics.averageShortEdge /= static_cast<double>(slots.size());
         metrics.averageMotion /= static_cast<double>(slots.size());
     } else {
         metrics.minScale = 0.0;
+        metrics.minShortEdge = 0.0;
     }
 
     const double areaPixels = std::max(1.0, area.width * area.height);
@@ -443,6 +529,10 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.score += (0.08 - metrics.minScale) * 1000000.0;
     if (metrics.averageScale < 0.18)
         metrics.score += (0.18 - metrics.averageScale) * 250000.0;
+    if (metrics.minShortEdge < 24.0)
+        metrics.score += (24.0 - metrics.minShortEdge) * 2500.0;
+    if (metrics.averageShortEdge < 44.0)
+        metrics.score += (44.0 - metrics.averageShortEdge) * 1200.0;
     if (metrics.targetAreaRatio < 0.12 && slots.size() <= 10)
         metrics.score += (0.12 - metrics.targetAreaRatio) * 100000.0;
     metrics.score += metrics.gravityOffset * 40000.0;
@@ -700,6 +790,7 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
     out << "<text x=\"" << inner.x << "\" y=\"" << (inner.y + inner.height + 22)
         << "\" font-family=\"monospace\" font-size=\"14\" fill=\"#334155\">gravity=" << std::setprecision(3) << metrics.gravityOffset
         << " heatMax=" << metrics.heatMax << " heatStdDev=" << metrics.heatStdDev << " heatImbalance=" << metrics.heatImbalance
+        << " short(min/avg)=" << std::setprecision(1) << metrics.minShortEdge << "/" << metrics.averageShortEdge
         << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion << " inv(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
         << "</text>\n";
     out << "</svg>\n";
@@ -724,6 +815,8 @@ void printMetrics(const LayoutMetrics& metrics) {
               << " outOfBoundsArea=" << metrics.outOfBoundsArea
               << " minScale=" << std::setprecision(3) << metrics.minScale
               << " averageScale=" << metrics.averageScale
+              << " minShortEdge=" << std::setprecision(1) << metrics.minShortEdge
+              << " averageShortEdge=" << metrics.averageShortEdge
               << " targetAreaRatio=" << metrics.targetAreaRatio
               << " gravityOffset=" << metrics.gravityOffset
               << " centroid=" << static_cast<int>(metrics.targetCentroidX) << "," << static_cast<int>(metrics.targetCentroidY)

@@ -42,6 +42,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("row_spacing", 32L);
     CONF("column_spacing", 32L);
     CONF("min_window_length", 120L);
+    CONF("min_preview_short_edge", 32L);
     CONF("small_window_boost", 1.35F);
     CONF("max_preview_scale", 0.95F);
     CONF("min_slot_scale", 0.10F);

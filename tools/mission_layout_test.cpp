@@ -241,6 +241,27 @@ int main() {
     {
         LayoutConfig config = deterministicConfig();
         config.engine = LayoutEngine::Natural;
+        config.minPreviewShortEdge = 32.0;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {0, 40, 1450, 48}, .label = "thin-wide"},
+            {.index = 1, .natural = {120, 140, 56, 680}, .label = "thin-tall"},
+            {.index = 2, .natural = {260, 260, 1300, 64}, .label = "thin-wide-2"},
+            {.index = 3, .natural = {560, 70, 64, 720}, .label = "thin-tall-2"},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 1100, 700}, config);
+        ok &= expect(slots.size() == 4, "natural engine should keep extreme-aspect windows");
+        for (const auto& slot : slots) {
+            ok &= expect(rectInside(slot.target, {0, 0, 1100, 700}), "extreme-aspect previews should stay inside the monitor");
+            ok &= expect(std::min(slot.target.width, slot.target.height) >= 31.9,
+                         "natural engine should enforce a readable short edge for extreme-aspect previews");
+        }
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
         config.rowSpacing = 32.0;
         config.columnSpacing = 32.0;
 
@@ -312,21 +333,25 @@ int main() {
         LayoutConfig config = deterministicConfig();
         config.engine = LayoutEngine::Natural;
         config.forceRowGroups = true;
-
-        LayoutConfig gridConfig = config;
-        gridConfig.engine = LayoutEngine::Grid;
+        config.rowSpacing = 40.0;
+        config.columnSpacing = 24.0;
 
         const std::vector<WindowInput> windows = {
             {.index = 0, .natural = {0, 0, 240, 180}, .label = "a", .rowGroup = 0},
-            {.index = 1, .natural = {260, 0, 240, 180}, .label = "b", .rowGroup = 0},
-            {.index = 2, .natural = {0, 220, 240, 180}, .label = "c", .rowGroup = 1},
+            {.index = 1, .natural = {300, 20, 240, 180}, .label = "b", .rowGroup = 0},
+            {.index = 2, .natural = {0, 260, 240, 180}, .label = "c", .rowGroup = 1},
+            {.index = 3, .natural = {300, 280, 240, 180}, .label = "d", .rowGroup = 1},
         };
 
-        const auto naturalSlots = engine.compute(windows, {0, 0, 700, 500}, config);
-        const auto gridSlots = engine.compute(windows, {0, 0, 700, 500}, gridConfig);
-        ok &= expect(naturalSlots.size() == gridSlots.size(), "natural engine should preserve row-group fallback cardinality");
-        for (std::size_t i = 0; i < naturalSlots.size() && i < gridSlots.size(); ++i)
-            ok &= expectSlot(naturalSlots[i], gridSlots[i].target, gridSlots[i].scale, "row-group fallback should use the grid layout");
+        const Rect area{0, 0, 700, 500};
+        const auto slots = engine.compute(windows, area, config);
+        ok &= expect(slots.size() == windows.size(), "row-group natural layout should preserve cardinality");
+        for (const auto& slot : slots)
+            ok &= expect(rectInside(slot.target, area), "row-group natural layout should stay inside the area");
+        ok &= expect(slots[0].target.centerY() < slots[2].target.centerY() && slots[1].target.centerY() < slots[3].target.centerY(),
+                     "row-group natural layout should keep workspace bands ordered");
+        ok &= expect(slots[0].target.centerX() < slots[1].target.centerX() && slots[2].target.centerX() < slots[3].target.centerX(),
+                     "row-group natural layout should preserve within-band left/right order");
     }
 
     return ok ? EXIT_SUCCESS : EXIT_FAILURE;

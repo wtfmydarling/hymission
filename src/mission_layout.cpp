@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace hymission {
 
@@ -71,6 +72,10 @@ double normalizedMinSlotScale(const LayoutConfig& config) {
     return std::clamp(config.minSlotScale, 0.0, normalizedMaxPreviewScale(config));
 }
 
+double normalizedMinPreviewShortEdge(const LayoutConfig& config, const Rect& area) {
+    return std::clamp(config.minPreviewShortEdge, 0.0, std::min(area.width, area.height));
+}
+
 double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) {
     const double widthFit = area.width / std::max(1.0, window.input.natural.width);
     const double heightFit = area.height / std::max(1.0, window.input.natural.height);
@@ -78,7 +83,7 @@ double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) 
 }
 
 bool naturalSolverAllowedForCount(std::size_t count) {
-    return count <= 24;
+    return count <= 12;
 }
 
 double clampLayoutScale(double value, const LayoutConfig& config) {
@@ -94,6 +99,28 @@ double computeWindowScale(const Rect& naturalForLayout, const Rect& monitorArea,
     const double denom = std::max(1.0, monitorArea.height);
     const double ratio = std::clamp(naturalForLayout.height / denom, 0.0, 1.0);
     return lerp(config.smallWindowBoost, 1.0, ratio);
+}
+
+std::pair<double, double> previewSizeWithShortEdgeFloor(const PreparedWindow& window,
+                                                        double                scale,
+                                                        const Rect&           area,
+                                                        const LayoutConfig&   config,
+                                                        double                shortEdgeCap = std::numeric_limits<double>::infinity()) {
+    double width = std::max(0.0, window.input.natural.width * scale);
+    double height = std::max(0.0, window.input.natural.height * scale);
+    if (width <= 0.0 || height <= 0.0)
+        return {width, height};
+
+    const double shortEdge = std::min(width, height);
+    const double floor = std::min(normalizedMinPreviewShortEdge(config, area), std::max(0.0, shortEdgeCap));
+    if (floor > shortEdge) {
+        if (width < height)
+            width = std::min(floor, area.width);
+        else
+            height = std::min(floor, area.height);
+    }
+
+    return {width, height};
 }
 
 bool keepSameRow(const Row& row, double candidateWidth, double idealRowWidth) {
@@ -298,8 +325,8 @@ std::vector<WindowSlot> materializeSlots(LayoutCandidate candidate, const Rect& 
 
             scale = std::clamp(scale, 0.0, normalizedMaxPreviewScale(config));
 
-            const double previewWidth = window.input.natural.width * scale;
-            const double previewHeight = window.input.natural.height * scale;
+            const auto [previewWidth, previewHeight] =
+                previewSizeWithShortEdgeFloor(window, scale, area, config, std::min(cellWidth, cellHeight));
             const double previewX = std::floor(x + (cellWidth - previewWidth) / 2.0);
             const double previewY = std::floor(candidate.rows.size() == 1 ? rowY + (rowHeight - previewHeight) / 2.0
                                                                            : rowY + rowHeight - cellHeight);
@@ -457,10 +484,9 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     for (std::size_t order = 0; order < prepared.size(); ++order) {
         const auto&  window = prepared[order];
         const double scale = std::clamp(baseScale * window.weightScale, 0.0, std::min(normalizedMaxPreviewScale(config), naturalFitScaleForWindow(window, area)));
-        const double cellWidth = std::max(1.0, window.layoutWidth * scale);
-        const double cellHeight = std::max(1.0, window.layoutHeight * scale);
-        const double previewWidth = std::max(0.0, window.input.natural.width * scale);
-        const double previewHeight = std::max(0.0, window.input.natural.height * scale);
+        const auto [previewWidth, previewHeight] = previewSizeWithShortEdgeFloor(window, scale, area, config);
+        const double cellWidth = std::max({1.0, window.layoutWidth * scale, previewWidth});
+        const double cellHeight = std::max({1.0, window.layoutHeight * scale, previewHeight});
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
@@ -703,6 +729,70 @@ std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& pre
     return materializeSlots(std::move(*best), inner, config);
 }
 
+std::optional<std::vector<WindowSlot>> computeNaturalRowGroupLayout(const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.empty())
+        return std::vector<WindowSlot>{};
+
+    std::vector<PreparedWindow> sorted = prepared;
+    std::stable_sort(sorted.begin(), sorted.end(), [&](const PreparedWindow& a, const PreparedWindow& b) {
+        if (a.input.rowGroup != b.input.rowGroup)
+            return a.input.rowGroup < b.input.rowGroup;
+        if (config.preserveInputOrder)
+            return false;
+        if (std::abs(a.input.natural.centerY() - b.input.natural.centerY()) > 0.5)
+            return a.input.natural.centerY() < b.input.natural.centerY();
+        return a.input.natural.centerX() < b.input.natural.centerX();
+    });
+
+    std::vector<std::vector<PreparedWindow>> groups;
+    for (const auto& window : sorted) {
+        if (groups.empty() || groups.back().front().input.rowGroup != window.input.rowGroup)
+            groups.emplace_back();
+        groups.back().push_back(window);
+    }
+
+    if (groups.empty())
+        return std::vector<WindowSlot>{};
+
+    LayoutConfig groupConfig = config;
+    groupConfig.forceRowGroups = false;
+
+    const double spacing = groups.size() > 1 ? std::max(0.0, config.rowSpacing) : 0.0;
+    const double totalSpacing = spacing * static_cast<double>(groups.size() - 1);
+    const double bandHeight = std::max(1.0, (area.height - totalSpacing) / static_cast<double>(groups.size()));
+
+    std::vector<WindowSlot> slots;
+    double                  y = area.y;
+    for (const auto& group : groups) {
+        const Rect band{
+            area.x,
+            y,
+            area.width,
+            bandHeight,
+        };
+
+        std::vector<WindowSlot> groupSlots;
+        if (naturalSolverAllowedForCount(group.size())) {
+            if (auto natural = computeNaturalLayout(group, band, groupConfig))
+                groupSlots = std::move(*natural);
+        }
+
+        if (groupSlots.empty())
+            groupSlots = computeGridLayout(group, band, groupConfig);
+
+        slots.insert(slots.end(), groupSlots.begin(), groupSlots.end());
+        y += bandHeight + spacing;
+    }
+
+    if (slots.size() != prepared.size())
+        return std::nullopt;
+
+    std::sort(slots.begin(), slots.end(), [](const WindowSlot& a, const WindowSlot& b) {
+        return a.index < b.index;
+    });
+    return slots;
+}
+
 } // namespace
 
 std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) const {
@@ -712,9 +802,14 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
     const Rect inner = insetArea(area, config);
     const auto prepared = prepareWindows(windows, inner, config);
 
-    if (config.engine == LayoutEngine::Natural && !config.forceRowGroups && naturalSolverAllowedForCount(prepared.size())) {
-        if (auto natural = computeNaturalLayout(prepared, inner, config))
-            return *natural;
+    if (config.engine == LayoutEngine::Natural) {
+        if (config.forceRowGroups) {
+            if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, inner, config))
+                return *groupedNatural;
+        } else if (naturalSolverAllowedForCount(prepared.size())) {
+            if (auto natural = computeNaturalLayout(prepared, inner, config))
+                return *natural;
+        }
     }
 
     return computeGridLayout(prepared, inner, config);

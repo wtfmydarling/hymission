@@ -172,6 +172,7 @@ plugin {
         row_spacing = 32
         column_spacing = 32
         min_window_length = 120
+        min_preview_short_edge = 32
         small_window_boost = 1.35
         max_preview_scale = 0.95
         min_slot_scale = 0.10
@@ -223,6 +224,7 @@ plugin {
 | `row_spacing` | int | `32` | Vertical spacing between preview rows. |
 | `column_spacing` | int | `32` | Horizontal spacing between preview columns. |
 | `min_window_length` | int | `120` | Minimum edge length used before layout scoring. |
+| `min_preview_short_edge` | int | `32` | Minimum rendered short edge for previews, used to keep ultra-wide, ultra-tall, or very small windows recognizable. |
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
 | `max_preview_scale` | float | `0.95` | Maximum preview scale. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
