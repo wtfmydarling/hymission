@@ -142,14 +142,18 @@ switch_release_key = Super_L
 gesture = 4, vertical, dispatcher, hymission:toggle,forceall
 gesture = 4, vertical, dispatcher, hymission:toggle,recommand
 gesture = 4, vertical, dispatcher, hymission:open,onlycurrentworkspace
+gesture = 3, horizontal, dispatcher, hymission:scroll,layout
+gesture = 3, vertical, dispatcher, hymission:scroll,workspace
+gesture = 3, swipe, dispatcher, hymission:scroll,both
 ```
 
 Gesture notes:
 
-- `vertical` and `horizontal` are supported
+- `vertical` and `horizontal` are supported for plugin-managed overview gestures; `hymission:scroll` also supports `swipe`
 - unofficial shorthand such as `gesture = ..., hymission:toggle,...` is not supported
 - default gesture semantics are state-aware: hidden overview opens in the configured direction, and visible `hymission:toggle,*` overview can close in either swipe direction
 - `recommand` is gesture-only and is only valid with `hymission:toggle`
+- `hymission:scroll` is intended for `niri_mode = 1`; `layout` continuously drives Hyprland's scrolling layout, `workspace` uses Hymission's overview workspace transition when overview is visible and native workspace swipe otherwise, and `both` prioritizes workspace swipes in overview and layout scrolls outside overview when the gesture axis matches `scrolling:direction`
 - in `recommand` mode, one side opens `forceall` and the other side opens `onlycurrentworkspace`
 - switching from one visible `recommand` side to the other only works in the side-changing direction; it must pass through hidden state and then cross a small transfer gap before the opposite side starts opening
 - swiping the other visible `recommand` direction only exits overview back to hidden and does not continue into the opposite side
@@ -183,6 +187,8 @@ plugin {
         expand_selected_window = 1
         overview_focus_follows_mouse = 1
         multi_workspace_sort_recent_first = 1
+        niri_mode = 0
+        niri_scroll_pixels_per_delta = 1.0
         toggle_switch_mode = 1
         switch_toggle_auto_next = 1
         switch_release_key = Super_L
@@ -240,6 +246,8 @@ plugin {
 | `expand_selected_window` | bool | `1` | Enlarge the selected preview and push nearby previews away without reshuffling the whole overview grid. Uses the overview-selected target, which usually follows hover when `overview_focus_follows_mouse = 1`. |
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
+| `niri_mode` | bool | `0` | Enable the niri-like gesture/strip integration. This is opt-in and does not change existing overview gestures unless the matching `hymission:scroll` gestures are configured. |
+| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` continuous scrolling-layout movement. |
 | `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
 | `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
@@ -274,6 +282,7 @@ Behavior notes:
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
+With `niri_mode = 1`, the strip keeps the configured `workspace_strip_anchor` but uses monitor-aspect workspace thumbnails and centers the active workspace in the strip when there is room.
 
 ### Optional Waybar Single-Entry Setup
 

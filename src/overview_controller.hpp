@@ -68,6 +68,10 @@ class OverviewController {
     [[nodiscard]] bool            beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction);
     void                          updateOverviewWorkspaceSwipeGesture(double delta);
     void                          endOverviewWorkspaceSwipeGesture(bool cancelled);
+    [[nodiscard]] bool            beginScrollGesture(HymissionScrollMode mode, eTrackpadGestureDirection direction,
+                                                     const IPointer::SSwipeUpdateEvent& event, float deltaScale);
+    void                          updateScrollGesture(const IPointer::SSwipeUpdateEvent& event);
+    void                          endScrollGesture(bool cancelled);
 
     void renderStage(eRenderStage stage);
     void handleMouseMove();
@@ -261,6 +265,21 @@ class OverviewController {
         float        deltaScale = 1.0F;
     };
 
+    enum class ScrollGestureRoute {
+        None,
+        Layout,
+        OverviewWorkspace,
+        Blocked,
+    };
+
+    struct ScrollGestureSession {
+        bool                      active = false;
+        HymissionScrollMode       mode = HymissionScrollMode::Both;
+        ScrollGestureRoute        route = ScrollGestureRoute::None;
+        eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+        float                     deltaScale = 1.0F;
+    };
+
     struct WorkspaceNameBackup {
         PHLWORKSPACE workspace;
         std::string  name;
@@ -366,10 +385,18 @@ class OverviewController {
     [[nodiscard]] double       hideBarAnimationAlphaEnd() const;
     [[nodiscard]] bool         barSingleMissionControlEnabled() const;
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
+    [[nodiscard]] bool         niriModeEnabled() const;
+    [[nodiscard]] double       niriScrollPixelsPerDelta() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
+    [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;
     [[nodiscard]] bool         isScrollingWorkspace(const PHLWORKSPACE& workspace) const;
     [[nodiscard]] bool         hasScrollingWorkspace() const;
+    [[nodiscard]] GestureAxis  gestureAxisForDirection(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] ScrollingLayoutDirection scrollingLayoutDirection() const;
+    [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
+    [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
+    [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
@@ -638,6 +665,7 @@ class OverviewController {
     std::vector<GestureRegistration> m_registeredGestures;
     std::vector<WorkspaceNameBackup> m_workspaceNameBackups;
     GestureSession            m_gestureSession;
+    ScrollGestureSession      m_scrollGestureSession;
     WorkspaceSwipeGestureContext m_workspaceSwipeGesture;
     WorkspaceTransition      m_workspaceTransition;
     StripPreviewContext      m_stripPreviewContext;
