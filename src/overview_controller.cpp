@@ -3114,6 +3114,48 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
     return true;
 }
 
+void OverviewController::refreshNiriScrollingOverviewAfterLayoutScroll(const char* source) {
+    if (!isVisible() || m_state.phase != Phase::Active || !niriModeEnabled() || !m_state.ownerMonitor || !isScrollingWorkspace(activeLayoutWorkspace()))
+        return;
+
+    State next = buildState(m_state.ownerMonitor, m_state.collectionPolicy.requestedScope, {}, false, m_state.suppressWorkspaceStrip, m_state.focusDuringOverview);
+    if (next.windows.empty())
+        return;
+
+    std::size_t updated = 0;
+    m_state.slots.clear();
+    for (auto& managed : m_state.windows) {
+        auto it = std::find_if(next.windows.begin(), next.windows.end(), [&](const ManagedWindow& candidate) { return candidate.window == managed.window; });
+        if (it == next.windows.end()) {
+            m_state.slots.push_back(managed.slot);
+            continue;
+        }
+
+        managed.naturalGlobal = it->naturalGlobal;
+        managed.slot = it->slot;
+        managed.targetGlobal = it->targetGlobal;
+        managed.relayoutFromGlobal = managed.targetGlobal;
+        m_state.slots.push_back(managed.slot);
+        ++updated;
+    }
+
+    if (updated == 0)
+        return;
+
+    m_state.relayoutActive = false;
+    m_state.relayoutProgress = 1.0;
+    m_state.relayoutStart = {};
+
+    if (debugLogsEnabled()) {
+        std::ostringstream out;
+        out << "[hymission] niri scrolling overview refresh source=" << (source ? source : "?") << " updated=" << updated;
+        debugLog(out.str());
+    }
+
+    updateHoveredFromPointer(false, false, false, false, source ? source : "niri-scroll");
+    damageOwnedMonitors();
+}
+
 double OverviewController::gestureSwipeDistance() const {
     return std::max(1.0, static_cast<double>(getConfigInt(m_handle, "gestures:workspace_swipe_distance", 300)));
 }
@@ -3995,7 +4037,8 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return reject("overview-closing");
 
-    if (isVisible())
+    const bool overviewVisible = isVisible();
+    if (overviewVisible && (!niriModeEnabled() || m_state.phase != Phase::Active))
         return reject("overview-visible");
 
     if (!canScrollActiveLayoutWithGesture(direction))
@@ -4028,6 +4071,7 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         m_scrollGestureSession = {};
         return reject("initial-layout-scroll-failed");
     }
+    refreshNiriScrollingOverviewAfterLayoutScroll("scroll-begin");
 
     return true;
 }
@@ -4044,6 +4088,7 @@ void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& 
     switch (m_scrollGestureSession.route) {
         case ScrollGestureRoute::Layout:
             (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
+            refreshNiriScrollingOverviewAfterLayoutScroll("scroll-update");
             break;
         case ScrollGestureRoute::None:
         default:
@@ -4056,15 +4101,23 @@ void OverviewController::endScrollGesture(bool cancelled) {
         return;
 
     const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
+    const bool forceInputRefocus = !isVisible() && !cancelled && m_scrollGestureSession.route == ScrollGestureRoute::Layout;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
-            << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0);
+            << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0)
+            << " forceInputRefocus=" << (forceInputRefocus ? 1 : 0);
         debugLog(out.str());
     }
 
     m_scrollGestureSession = {};
+
+    if (forceInputRefocus && g_pInputManager) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] scroll gesture end force input refocus");
+        g_pInputManager->refocus();
+    }
 
     if (deferScrollingFollowFocusRestore)
         m_restoreScrollingFollowFocusAfterScrollMouseMove = true;
@@ -9653,8 +9706,11 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
                                                         std::size_t windowIndex) -> std::optional<WindowSlot> {
-        if (!niriModeEnabled() || !state.collectionPolicy.onlyActiveWorkspace || !window || !targetMonitor || window->m_pinned || !window->m_workspace ||
-            !window->m_workspace->m_space || !isScrollingWorkspace(window->m_workspace))
+        if (!niriModeEnabled() || !window || !targetMonitor || window->m_pinned || !window->m_workspace || !window->m_workspace->m_space ||
+            !isScrollingWorkspace(window->m_workspace))
+            return std::nullopt;
+
+        if (!state.collectionPolicy.onlyActiveWorkspace && window->m_workspace != state.ownerWorkspace)
             return std::nullopt;
 
         auto* const scrolling = scrollingAlgorithmForWorkspace(window->m_workspace);

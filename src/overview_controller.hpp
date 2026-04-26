@@ -406,6 +406,7 @@ class OverviewController {
     [[nodiscard]] double       scrollLayoutPixelsPerGestureDelta(ScrollingLayoutDirection direction) const;
     [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
     [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
+    void                       refreshNiriScrollingOverviewAfterLayoutScroll(const char* source);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
