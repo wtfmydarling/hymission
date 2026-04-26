@@ -1018,11 +1018,18 @@ Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
+Rect renderGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    Rect rect = sceneGlobalRectForWindow(window, goal);
+    if (window && window->m_isFloating)
+        rect = translateRect(rect, window->m_floatingOffset.x, window->m_floatingOffset.y);
+    return rect;
+}
+
 Rect surfaceRenderGlobalRectForWindow(const PHLWINDOW& window) {
     if (!window)
         return {};
 
-    return sceneGlobalRectForWindow(window);
+    return renderGlobalRectForWindow(window);
 }
 
 Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORKSPACE& workspace) {
@@ -9862,7 +9869,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         std::optional<WindowSlot> directNiriSlot;
         bool directNiriFloatingOverlay = false;
 
-        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, sceneGlobalRectForWindow(window, useGoalGeometry));
+        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, renderGlobalRectForWindow(window, useGoalGeometry));
         directNiriSlot = niriFloatingOverviewSlotForWindow(window, targetMonitor, floatingSourceGlobal, windowIndex);
         if (directNiriSlot) {
             directNiriSourceGlobal = floatingSourceGlobal;
@@ -9972,7 +9979,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     floatingIndexes.push_back(index);
             }
 
-            if (floatingIndexes.size() < 2)
+            if (floatingIndexes.empty())
                 continue;
 
             const Rect boundsLocal = overviewContentRectForMonitor(candidateMonitor, state);
@@ -9981,16 +9988,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             if (boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0)
                 continue;
 
-            std::vector<std::size_t> placed;
-            placed.reserve(floatingIndexes.size());
+            std::vector<Rect> placedRects;
+            placedRects.reserve(state.windows.size());
+            for (const auto& managed : state.windows) {
+                if (managed.targetMonitor == candidateMonitor && !managed.isNiriFloatingOverlay)
+                    placedRects.push_back(inflateRect(managed.targetGlobal, gap, gap));
+            }
+
             for (const auto index : floatingIndexes) {
                 Rect target = state.windows[index].targetGlobal;
                 bool adjusted = false;
 
-                for (std::size_t pass = 0; pass < 4; ++pass) {
+                for (std::size_t pass = 0; pass < 8; ++pass) {
                     bool changed = false;
-                    for (const auto obstacleIndex : placed) {
-                        const Rect obstacle = inflateRect(state.windows[obstacleIndex].targetGlobal, gap, gap);
+                    for (const auto& obstacle : placedRects) {
                         if (!rectsOverlap(target, obstacle))
                             continue;
 
@@ -9998,8 +10009,8 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                         double directionY = target.centerY() - obstacle.centerY();
                         double length = std::hypot(directionX, directionY);
                         if (length <= 0.001) {
-                            directionX = (index % 2) == 0 ? 1.0 : -1.0;
-                            directionY = (index % 3) == 0 ? 1.0 : -1.0;
+                            directionX = target.centerX() >= boundsGlobal.centerX() ? 1.0 : -1.0;
+                            directionY = target.centerY() >= boundsGlobal.centerY() ? 1.0 : -1.0;
                             length = std::hypot(directionX, directionY);
                         }
                         directionX /= length;
@@ -10030,7 +10041,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     }
                 }
 
-                placed.push_back(index);
+                placedRects.push_back(inflateRect(state.windows[index].targetGlobal, gap, gap));
             }
         }
     };
