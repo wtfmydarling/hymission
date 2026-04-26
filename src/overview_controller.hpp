@@ -452,6 +452,8 @@ class OverviewController {
     [[nodiscard]] std::optional<WindowTransform> windowTransformFor(const PHLWINDOW& window, const PHLMONITOR& monitor) const;
     [[nodiscard]] bool                          transformSurfaceRenderDataForWindow(const PHLWINDOW& window, const PHLMONITOR& monitor,
                                                                                    CSurfacePassElement::SRenderData& renderData) const;
+    bool                                        adjustTransformedSurfaceBoxSize(const CSurfacePassElement::SRenderData& renderData, const PHLMONITOR& monitor,
+                                                                               CBox& box) const;
     [[nodiscard]] double                        hiddenStripLayerProgress(const PHLLS& layer, const PHLMONITOR& monitor) const;
     void                                        clearHiddenStripLayerProxies();
     void                                        syncHiddenStripLayerProxies();
@@ -531,6 +533,7 @@ class OverviewController {
     [[nodiscard]] bool          isSwitchReleaseEvent(const IKeyboard::SKeyEvent& event, const SP<IKeyboard>& keyboard) const;
     void                        updateToggleSwitchSessionReleaseTracking(const char* source = "?");
     void                        scheduleToggleSwitchReleasePoll();
+    void                        clearToggleSwitchReleasePollTimer();
     void                        clearToggleSwitchSession();
     void latchHoverSelectionAnchor(const Vector2D& pointer);
     [[nodiscard]] bool hoverSelectionRetargetLocked(const Vector2D& pointer, const std::optional<std::size_t>& hoveredIndex) const;

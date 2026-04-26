@@ -42,6 +42,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("row_spacing", 32L);
     CONF("column_spacing", 32L);
     CONF("min_window_length", 120L);
+    CONF("min_preview_short_edge", 32L);
     CONF("small_window_boost", 1.35F);
     CONF("max_preview_scale", 0.95F);
     CONF("min_slot_scale", 0.10F);
@@ -71,6 +72,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     CONF("debug_logs", 0L);
     CONF("debug_surface_logs", 0L);
 #undef CONF
+    HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:layout_engine", Hyprlang::STRING{"grid"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_anchor", Hyprlang::STRING{"left"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:workspace_strip_empty_mode", Hyprlang::STRING{"existing"});
     HyprlandAPI::addConfigValue(g_pluginHandle, "plugin:hymission:switch_release_key", Hyprlang::STRING{"Super_L"});
@@ -99,7 +101,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "hymission",
         .description = "Mission Control style overview prototype",
         .author = "wilf",
-        .version = "0.2.0",
+        .version = "0.2.1",
     };
 }
 

@@ -7,6 +7,7 @@
 
 > [!WARNING]
 > Hyprland plugins run inside the compositor process. Install plugins only from sources you trust.
+> `hymission` may not work correctly on NVIDIA GPUs/drivers.
 
 > [!WARNING]
 > This software is 99% vibe coded with OpenAI CodeX, but have been manual audited, warn in case you mind it.
@@ -174,9 +175,11 @@ plugin {
         row_spacing = 32
         column_spacing = 32
         min_window_length = 120
+        min_preview_short_edge = 32
         small_window_boost = 1.35
         max_preview_scale = 0.95
         min_slot_scale = 0.10
+        layout_engine = grid
         layout_scale_weight = 1.0
         layout_space_weight = 0.10
 
@@ -224,9 +227,11 @@ plugin {
 | `row_spacing` | int | `32` | Vertical spacing between preview rows. |
 | `column_spacing` | int | `32` | Horizontal spacing between preview columns. |
 | `min_window_length` | int | `120` | Minimum edge length used before layout scoring. |
+| `min_preview_short_edge` | int | `32` | Minimum rendered short edge for previews, used to keep ultra-wide, ultra-tall, or very small windows recognizable. |
 | `small_window_boost` | float | `1.35` | Weight boost applied to smaller windows during layout. |
 | `max_preview_scale` | float | `0.95` | Maximum preview scale. |
 | `min_slot_scale` | float | `0.10` | Minimum allowed slot scale. |
+| `layout_engine` | string | `grid` | Geometry solver. `grid` keeps the existing row-search layout; `natural`, `apple`, `expose`, and `mission-control` enable the Apple-like natural solver that tries to preserve original window positions while removing overlap. The natural engine attempts every window count and only uses row-search as an emergency fallback if solving fails. |
 | `layout_scale_weight` | float | `1.0` | Weight of preview scale in the layout scoring pass. |
 | `layout_space_weight` | float | `0.10` | Weight of space utilization in the layout scoring pass. |
 | `one_workspace_per_row` | bool | `0` | Keep each workspace on its own row instead of searching for the best row count. |
@@ -307,10 +312,16 @@ Useful commands:
 
 ```sh
 ./build-cmake/hymission-layout-demo
+./build-cmake/hymission-layout-demo --list-scenes
+./build-cmake/hymission-layout-demo --scene forceall --engine natural --output /tmp/hymission-forceall-natural.svg
+./build-cmake/hymission-layout-demo --scene forceall --engine grid --output /tmp/hymission-forceall-grid.svg
+./build-cmake/hymission-layout-demo --stress 5000 --seed 1 --output /tmp/hymission-stress-worst.svg
 ./build-cmake/hymission-mission-layout-test
 ./build-cmake/hymission-overview-logic-test
 hyprctl dispatch hymission:debug_current_layout
 ```
+
+`hymission-layout-demo` runs the geometry solver without loading the Hyprland plugin. In SVG output, dashed rectangles are source window geometry and solid rectangles are overview targets. Built-in scenes include `forceall`, `default`, `stacked`, `right-biased`, and `workspace-rows`. It also reports gravity, heatmap balance, motion, and x/y inversion metrics; SVG output draws heat cells, the screen center, and the target-area centroid. `--stress` generates random pathological scenes and writes the worst-scoring case for solver tuning.
 
 Project docs:
 

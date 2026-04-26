@@ -224,6 +224,14 @@ std::string asciiLowerCopy(std::string value) {
     return value;
 }
 
+LayoutEngine parseLayoutEngine(std::string value) {
+    value = asciiLowerCopy(std::move(value));
+    if (value == "natural" || value == "apple" || value == "apple-like" || value == "expose" || value == "mission-control")
+        return LayoutEngine::Natural;
+
+    return LayoutEngine::Grid;
+}
+
 std::optional<uint32_t> switchReleaseModifierMask(const std::string& value) {
     const auto lowered = asciiLowerCopy(value);
     if (lowered == "shift" || lowered == "shift_l" || lowered == "shift_r")
@@ -957,6 +965,15 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
+Rect layoutAnchorGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    if (!window)
+        return {};
+
+    const Vector2D position = renderedWindowPosition(window, goal);
+    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    return makeRect(position.x, position.y, size.x, size.y);
+}
+
 Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     if (!window)
         return {};
@@ -1190,6 +1207,9 @@ std::optional<Vector2D> expectedSurfaceSizeForUV(const PHLWINDOW& window, const 
     if (surface->m_current.viewport.hasSource)
         return (surface->m_current.viewport.source.size() * monitor->m_scale).round();
 
+    if (!canUseWindow)
+        return (surface->m_current.size * monitor->m_scale).round();
+
     if (windowSizeMisalign)
         return (surface->m_current.size * monitor->m_scale).round();
 
@@ -1368,6 +1388,7 @@ OverviewController::OverviewController(HANDLE handle) : m_handle(handle) {
 
 OverviewController::~OverviewController() {
     destroyGaussianBlurPipeline();
+    clearToggleSwitchReleasePollTimer();
     clearRegisteredTrackpadGestures();
     clearPostCloseForcedFocus();
     clearPostCloseDispatcher();
@@ -1617,11 +1638,20 @@ void OverviewController::scheduleToggleSwitchReleasePoll() {
     m_toggleSwitchReleasePollTimer->updateTimeout(TOGGLE_SWITCH_RELEASE_POLL_INTERVAL);
 }
 
+void OverviewController::clearToggleSwitchReleasePollTimer() {
+    if (!m_toggleSwitchReleasePollTimer)
+        return;
+
+    m_toggleSwitchReleasePollTimer->cancel();
+    if (g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(m_toggleSwitchReleasePollTimer);
+    m_toggleSwitchReleasePollTimer.reset();
+}
+
 void OverviewController::clearToggleSwitchSession() {
     m_toggleSwitchSessionActive = false;
     m_toggleSwitchReleaseArmed = false;
-    if (m_toggleSwitchReleasePollTimer)
-        m_toggleSwitchReleasePollTimer->updateTimeout(std::nullopt);
+    clearToggleSwitchReleasePollTimer();
 }
 
 SDispatchResult OverviewController::open(const std::string& args) {
@@ -2461,8 +2491,14 @@ CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
     if (!m_surfaceTexBoxOriginal)
         return {};
 
-    if (m_surfaceRenderDataTransformDepth > 0)
-        return m_surfaceTexBoxOriginal(surfacePassThisptr);
+    if (m_surfaceRenderDataTransformDepth > 0) {
+        CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+        auto* renderData = surfaceRenderDataMutable(surfacePassThisptr);
+        auto  monitor = renderData ? renderData->pMonitor.lock() : PHLMONITOR{};
+        if (renderData && monitor)
+            adjustTransformedSurfaceBoxSize(*renderData, monitor, box);
+        return box;
+    }
 
     CSurfacePassElement::SRenderData* renderData = nullptr;
     PHLMONITOR                        monitor;
@@ -2471,7 +2507,8 @@ CBox OverviewController::surfaceTexBoxHook(void* surfacePassThisptr) {
         return m_surfaceTexBoxOriginal(surfacePassThisptr);
 
     ++m_surfaceRenderDataTransformDepth;
-    const CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    CBox box = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    adjustTransformedSurfaceBoxSize(*renderData, monitor, box);
     --m_surfaceRenderDataTransformDepth;
     restoreSurfaceRenderData(renderData, snapshot);
     return box;
@@ -2540,6 +2577,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 
     ++m_surfaceRenderDataTransformDepth;
     CBox fullBox = m_surfaceTexBoxOriginal(surfacePassThisptr);
+    adjustTransformedSurfaceBoxSize(*renderData, monitor, fullBox);
     --m_surfaceRenderDataTransformDepth;
     fullBox.scale(monitor->m_scale);
     fullBox.round();
@@ -2551,6 +2589,7 @@ CRegion OverviewController::surfaceVisibleRegionHook(void* surfacePassThisptr, b
 LayoutConfig OverviewController::loadLayoutConfig() const {
     const double outerPadding = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding", 32));
     return {
+        .engine = parseLayoutEngine(getConfigString(m_handle, "plugin:hymission:layout_engine", "grid")),
         .outerPaddingTop = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_top", static_cast<long>(outerPadding))),
         .outerPaddingRight = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_right", static_cast<long>(outerPadding))),
         .outerPaddingBottom = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:outer_padding_bottom", static_cast<long>(outerPadding))),
@@ -2560,6 +2599,7 @@ LayoutConfig OverviewController::loadLayoutConfig() const {
         .smallWindowBoost = getConfigFloat(m_handle, "plugin:hymission:small_window_boost", 1.35),
         .maxPreviewScale = getConfigFloat(m_handle, "plugin:hymission:max_preview_scale", 0.95),
         .minWindowLength = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_window_length", 120)),
+        .minPreviewShortEdge = static_cast<double>(getConfigInt(m_handle, "plugin:hymission:min_preview_short_edge", 32)),
         .layoutSpaceWeight = getConfigFloat(m_handle, "plugin:hymission:layout_space_weight", 0.10),
         .layoutScaleWeight = getConfigFloat(m_handle, "plugin:hymission:layout_scale_weight", 1.0),
         .minSlotScale = getConfigFloat(m_handle, "plugin:hymission:min_slot_scale", 0.10),
@@ -4164,15 +4204,18 @@ bool OverviewController::installHooks() {
         original = reinterpret_cast<OriginalT>(hook->m_original);
     };
 
-    if (!hookFunction("handleGesture", "CConfigManager::handleGesture(", m_handleGestureHook, reinterpret_cast<void*>(&hkHandleGesture))) {
-        notify("[hymission] failed to hook handleGesture", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
+    if (hookFunction("handleGesture", "CConfigManager::handleGesture(", m_handleGestureHook, reinterpret_cast<void*>(&hkHandleGesture))) {
+        if (m_handleGestureHook->hook()) {
+            m_handleGestureOriginal = reinterpret_cast<HandleGestureFn>(m_handleGestureHook->m_original);
+        } else {
+            notify("[hymission] gesture config hook unavailable; dispatcher controls still work", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
+            HyprlandAPI::removeFunctionHook(m_handle, m_handleGestureHook);
+            m_handleGestureHook = nullptr;
+            m_handleGestureOriginal = nullptr;
+        }
+    } else {
+        notify("[hymission] gesture config hook not found; dispatcher controls still work", CHyprColor(1.0, 0.65, 0.2, 1.0), 4000);
     }
-    if (!m_handleGestureHook->hook()) {
-        notify("[hymission] failed to activate handleGesture hook", CHyprColor(1.0, 0.2, 0.2, 1.0), 4000);
-        return false;
-    }
-    m_handleGestureOriginal = reinterpret_cast<HandleGestureFn>(m_handleGestureHook->m_original);
 
     if (!hookFunction("shouldRenderWindow",
                       "CHyprRenderer::shouldRenderWindow(Hyprutils::Memory::CSharedPointer<Desktop::View::CWindow>, Hyprutils::Memory::CSharedPointer<CMonitor>)",
@@ -4989,14 +5032,17 @@ std::optional<OverviewController::WindowTransform> OverviewController::windowTra
     } else {
         current = workspaceTransitionRectForWindow(window).value_or(currentPreviewRect(*managed));
     }
-    const Rect actual = surfaceRenderGlobalRectForWindow(window);
+    const Rect   actual = surfaceRenderGlobalRectForWindow(window);
     const double actualWidth = std::max(1.0, actual.width);
     const double actualHeight = std::max(1.0, actual.height);
+    const double uniformScale = std::max(0.0, std::min(current.width / actualWidth, current.height / actualHeight));
+    const Rect   fitted = makeRect(current.centerX() - actualWidth * uniformScale * 0.5, current.centerY() - actualHeight * uniformScale * 0.5,
+                                   actualWidth * uniformScale, actualHeight * uniformScale);
     return WindowTransform{
         .actualGlobal = actual,
-        .targetGlobal = current,
-        .scaleX = current.width / actualWidth,
-        .scaleY = current.height / actualHeight,
+        .targetGlobal = fitted,
+        .scaleX = uniformScale,
+        .scaleY = uniformScale,
     };
 }
 
@@ -5038,6 +5084,29 @@ bool OverviewController::transformSurfaceRenderDataForWindow(const PHLWINDOW& wi
     // Keep overview previews independent from normal-layout monitor clipping.
     renderData.clipBox = {};
 
+    return true;
+}
+
+bool OverviewController::adjustTransformedSurfaceBoxSize(const CSurfacePassElement::SRenderData& renderData, const PHLMONITOR& monitor, CBox& box) const {
+    if (renderData.mainSurface)
+        return false;
+
+    const auto transform = windowTransformFor(renderData.pWindow, monitor);
+    if (!transform)
+        return false;
+
+    Vector2D baseSize{box.width, box.height};
+    if (renderData.surface) {
+        if (renderData.surface->m_current.viewport.hasDestination)
+            baseSize = renderData.surface->m_current.viewport.destination;
+        else if (renderData.surface->m_current.viewport.hasSource)
+            baseSize = renderData.surface->m_current.viewport.source.size();
+        else
+            baseSize = renderData.surface->m_current.size;
+    }
+
+    box.width = std::max(1.0, baseSize.x * transform->scaleX);
+    box.height = std::max(1.0, baseSize.y * transform->scaleY);
     return true;
 }
 
@@ -5414,7 +5483,7 @@ bool OverviewController::shouldSuppressSurfaceBlur(void* surfacePassThisptr) con
 bool OverviewController::prepareSurfaceRenderData(void* surfacePassThisptr, const char* context, CSurfacePassElement::SRenderData*& renderData, PHLMONITOR& monitor,
                                                   SurfaceRenderDataSnapshot& snapshot) const {
     renderData = surfaceRenderDataMutable(surfacePassThisptr);
-    if (!renderData || !renderData->pWindow || renderData->popup)
+    if (!renderData || !renderData->pWindow)
         return false;
 
     monitor = renderData->pMonitor.lock();
@@ -9029,16 +9098,17 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
+        const Rect layoutGlobal = layoutAnchorGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
 
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
             .natural =
                 {
-                    naturalGlobal.x - targetMonitor->m_position.x,
-                    naturalGlobal.y - targetMonitor->m_position.y,
-                    naturalGlobal.width,
-                    naturalGlobal.height,
+                    layoutGlobal.x - targetMonitor->m_position.x,
+                    layoutGlobal.y - targetMonitor->m_position.y,
+                    layoutGlobal.width,
+                    layoutGlobal.height,
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
