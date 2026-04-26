@@ -155,6 +155,17 @@ Rect insetArea(const Rect& area, const LayoutConfig& config) {
     };
 }
 
+Rect insetNaturalEdgeArea(const Rect& area, const LayoutConfig& config) {
+    const double horizontal = std::min(area.width * 0.08, std::max(0.0, config.columnSpacing * 0.5));
+    const double vertical = std::min(area.height * 0.08, std::max(0.0, config.rowSpacing * 0.5));
+    return {
+        area.x + horizontal,
+        area.y + vertical,
+        std::max(1.0, area.width - horizontal * 2.0),
+        std::max(1.0, area.height - vertical * 2.0),
+    };
+}
+
 std::vector<PreparedWindow> prepareWindows(const std::vector<WindowInput>& windows, const Rect& area, const LayoutConfig& config) {
     std::vector<PreparedWindow> prepared;
     prepared.reserve(windows.size());
@@ -704,19 +715,12 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     double minY = std::numeric_limits<double>::infinity();
     double maxX = -std::numeric_limits<double>::infinity();
     double maxY = -std::numeric_limits<double>::infinity();
-    double weightedX = 0.0;
-    double weightedY = 0.0;
-    double totalArea = 0.0;
 
     for (const auto& slot : slots) {
         minX = std::min(minX, slot.target.x);
         minY = std::min(minY, slot.target.y);
         maxX = std::max(maxX, slot.target.x + slot.target.width);
         maxY = std::max(maxY, slot.target.y + slot.target.height);
-        const double area = slot.target.width * slot.target.height;
-        weightedX += slot.target.centerX() * area;
-        weightedY += slot.target.centerY() * area;
-        totalArea += area;
     }
 
     const double boundsWidth = maxX - minX;
@@ -724,10 +728,8 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
 
     const double boundsCenterX = (minX + maxX) / 2.0;
     const double boundsCenterY = (minY + maxY) / 2.0;
-    const double visualCenterX = totalArea > 0.0 ? weightedX / totalArea : boundsCenterX;
-    const double visualCenterY = totalArea > 0.0 ? weightedY / totalArea : boundsCenterY;
-    const double desiredDx = area.centerX() - (visualCenterX * 0.65 + boundsCenterX * 0.35);
-    const double desiredDy = area.centerY() - (visualCenterY * 0.65 + boundsCenterY * 0.35);
+    const double desiredDx = area.centerX() - boundsCenterX;
+    const double desiredDy = area.centerY() - boundsCenterY;
     const double minDx = area.x - minX;
     const double maxDx = area.x + area.width - maxX;
     const double minDy = area.y - minY;
@@ -938,13 +940,15 @@ std::vector<WindowSlot> MissionControlLayout::compute(const std::vector<WindowIn
     const auto prepared = prepareWindows(windows, inner, config);
 
     if (config.engine == LayoutEngine::Natural) {
+        const Rect naturalInner = insetNaturalEdgeArea(inner, config);
         if (config.forceRowGroups) {
-            if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, inner, config))
+            if (auto groupedNatural = computeNaturalRowGroupLayout(prepared, naturalInner, config))
                 return *groupedNatural;
         } else {
-            if (auto natural = computeNaturalLayout(prepared, inner, config))
+            if (auto natural = computeNaturalLayout(prepared, naturalInner, config))
                 return *natural;
         }
+        return computeGridLayout(prepared, naturalInner, config);
     }
 
     return computeGridLayout(prepared, inner, config);

@@ -57,6 +57,8 @@ struct LayoutMetrics {
     double edgeMarginTop = std::numeric_limits<double>::infinity();
     double edgeMarginBottom = std::numeric_limits<double>::infinity();
     double minEdgeMargin = 0.0;
+    double edgeBalanceX = 0.0;
+    double edgeBalanceY = 0.0;
     double averageMotion = 0.0;
     double maxMotion = 0.0;
     double heatMax = 0.0;
@@ -93,6 +95,8 @@ struct StressSummary {
     MetricSeries edgeMarginTop;
     MetricSeries edgeMarginBottom;
     MetricSeries minEdgeMargin;
+    MetricSeries edgeBalanceX;
+    MetricSeries edgeBalanceY;
     MetricSeries heatMax;
     MetricSeries heatStdDev;
     MetricSeries heatImbalance;
@@ -537,6 +541,8 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.averageShortEdge /= static_cast<double>(slots.size());
         metrics.averageMotion /= static_cast<double>(slots.size());
         metrics.minEdgeMargin = std::min({metrics.edgeMarginLeft, metrics.edgeMarginRight, metrics.edgeMarginTop, metrics.edgeMarginBottom});
+        metrics.edgeBalanceX = std::abs(metrics.edgeMarginLeft - metrics.edgeMarginRight);
+        metrics.edgeBalanceY = std::abs(metrics.edgeMarginTop - metrics.edgeMarginBottom);
     } else {
         metrics.minScale = 0.0;
         metrics.minShortEdge = 0.0;
@@ -545,6 +551,8 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.edgeMarginTop = 0.0;
         metrics.edgeMarginBottom = 0.0;
         metrics.minEdgeMargin = 0.0;
+        metrics.edgeBalanceX = 0.0;
+        metrics.edgeBalanceY = 0.0;
     }
 
     const double areaPixels = std::max(1.0, area.width * area.height);
@@ -768,6 +776,8 @@ void recordStressMetrics(StressSummary& summary, const LayoutMetrics& metrics) {
     recordMetric(summary.edgeMarginTop, metrics.edgeMarginTop);
     recordMetric(summary.edgeMarginBottom, metrics.edgeMarginBottom);
     recordMetric(summary.minEdgeMargin, metrics.minEdgeMargin);
+    recordMetric(summary.edgeBalanceX, metrics.edgeBalanceX);
+    recordMetric(summary.edgeBalanceY, metrics.edgeBalanceY);
     recordMetric(summary.heatMax, metrics.heatMax);
     recordMetric(summary.heatStdDev, metrics.heatStdDev);
     recordMetric(summary.heatImbalance, metrics.heatImbalance);
@@ -829,6 +839,8 @@ void printStressSummary(const StressSummary& summary) {
     printMetricSeries("edgeMarginTop", summary.edgeMarginTop);
     printMetricSeries("edgeMarginBottom", summary.edgeMarginBottom);
     printMetricSeries("minEdgeMargin", summary.minEdgeMargin);
+    printMetricSeries("edgeBalanceX", summary.edgeBalanceX);
+    printMetricSeries("edgeBalanceY", summary.edgeBalanceY);
     printMetricSeries("heatMax", summary.heatMax);
     printMetricSeries("heatStdDev", summary.heatStdDev);
     printMetricSeries("heatImbalance", summary.heatImbalance);
@@ -947,6 +959,7 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
         << " heatMax=" << metrics.heatMax << " heatStdDev=" << metrics.heatStdDev << " heatImbalance=" << metrics.heatImbalance
         << " short(min/avg)=" << std::setprecision(1) << metrics.minShortEdge << "/" << metrics.averageShortEdge
         << " edge(l/r/t/b)=" << metrics.edgeMarginLeft << "/" << metrics.edgeMarginRight << "/" << metrics.edgeMarginTop << "/" << metrics.edgeMarginBottom
+        << " edgeBalance(x/y)=" << metrics.edgeBalanceX << "/" << metrics.edgeBalanceY
         << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion << " inv(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
         << "</text>\n";
     out << "</svg>\n";
@@ -975,6 +988,7 @@ void printMetrics(const LayoutMetrics& metrics) {
               << " averageShortEdge=" << metrics.averageShortEdge
               << " edgeMargins(l/r/t/b)=" << metrics.edgeMarginLeft << "/" << metrics.edgeMarginRight << "/" << metrics.edgeMarginTop << "/" << metrics.edgeMarginBottom
               << " minEdgeMargin=" << metrics.minEdgeMargin
+              << " edgeBalance(x/y)=" << metrics.edgeBalanceX << "/" << metrics.edgeBalanceY
               << " targetAreaRatio=" << metrics.targetAreaRatio
               << " gravityOffset=" << metrics.gravityOffset
               << " centroid=" << static_cast<int>(metrics.targetCentroidX) << "," << static_cast<int>(metrics.targetCentroidY)
