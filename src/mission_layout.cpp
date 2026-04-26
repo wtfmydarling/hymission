@@ -204,31 +204,26 @@ std::vector<PreparedWindow> applyNaturalScaleFlex(std::vector<PreparedWindow> pr
         return prepared;
 
     std::vector<double> bias(prepared.size(), 0.0);
-    if (config.rankScaleByInputOrder) {
-        const double denom = std::max(1.0, static_cast<double>(prepared.size() - 1));
-        for (std::size_t i = 0; i < prepared.size(); ++i)
-            bias[i] = 1.0 - 2.0 * static_cast<double>(i) / denom;
-    } else {
-        std::vector<double> density(prepared.size(), 0.0);
-        const double        normX = std::max(1.0, area.width);
-        const double        normY = std::max(1.0, area.height);
-        for (std::size_t i = 0; i < prepared.size(); ++i) {
-            for (std::size_t j = 0; j < prepared.size(); ++j) {
-                if (i == j)
-                    continue;
+    std::vector<double> density(prepared.size(), 0.0);
+    const double        normX = std::max(1.0, area.width);
+    const double        normY = std::max(1.0, area.height);
+    for (std::size_t i = 0; i < prepared.size(); ++i) {
+        for (std::size_t j = 0; j < prepared.size(); ++j) {
+            if (i == j)
+                continue;
 
-                const double dx = (prepared[i].input.natural.centerX() - prepared[j].input.natural.centerX()) / normX;
-                const double dy = (prepared[i].input.natural.centerY() - prepared[j].input.natural.centerY()) / normY;
-                const double distanceSq = dx * dx + dy * dy;
-                density[i] += std::exp(-distanceSq / 0.10);
-            }
+            const double dx = (prepared[i].input.natural.centerX() - prepared[j].input.natural.centerX()) / normX;
+            const double dy = (prepared[i].input.natural.centerY() - prepared[j].input.natural.centerY()) / normY;
+            const double distanceSq = dx * dx + dy * dy;
+            density[i] += std::exp(-distanceSq / 0.10);
         }
+    }
 
-        const auto [minIt, maxIt] = std::minmax_element(density.begin(), density.end());
-        const double range = *maxIt - *minIt;
-        if (range > 0.000001) {
-            for (std::size_t i = 0; i < prepared.size(); ++i)
-                bias[i] = std::clamp(((*maxIt + *minIt) * 0.5 - density[i]) / (range * 0.5), -1.0, 1.0);
+    const auto [minIt, maxIt] = std::minmax_element(density.begin(), density.end());
+    const double range = *maxIt - *minIt;
+    if (range > 0.000001) {
+        for (std::size_t i = 0; i < prepared.size(); ++i) {
+            bias[i] = std::clamp(((*maxIt + *minIt) * 0.5 - density[i]) / (range * 0.5), -1.0, 1.0);
         }
     }
 
