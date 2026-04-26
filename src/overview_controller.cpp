@@ -1036,10 +1036,6 @@ Layout::Tiled::CScrollingAlgorithm* scrollingAlgorithmForWorkspace(const PHLWORK
     return dynamic_cast<Layout::Tiled::CScrollingAlgorithm*>(algorithm->tiledAlgo().get());
 }
 
-Rect rectFromBox(const CBox& box) {
-    return makeRect(box.x, box.y, box.width, box.height);
-}
-
 Rect centeredSurfaceRectInLayoutBox(const CBox& layoutBox, const Rect& surfaceGlobal) {
     const double width = surfaceGlobal.width > 1.0 ? surfaceGlobal.width : layoutBox.width;
     const double height = surfaceGlobal.height > 1.0 ? surfaceGlobal.height : layoutBox.height;
@@ -1078,11 +1074,10 @@ Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Re
     if (!target || !target->floating())
         return fallbackGlobal;
 
-    const CBox targetBox = target->position();
-    if (targetBox.width <= 1.0 || targetBox.height <= 1.0)
-        return fallbackGlobal;
-
-    return rectFromBox(targetBox);
+    // Floating layout positions are not part of the scrolling tape. Anchor the
+    // overview preview from the live compositor rect so a window on the right
+    // side of the workspace remains on the right after the workspace-scale map.
+    return fallbackGlobal;
 }
 
 std::string vectorToString(const Vector2D& value) {
@@ -9800,8 +9795,11 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         const double scaledViewportHeight = workAreaBox.height * scale;
         const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
         const double viewportY = previewArea.y + (previewArea.height - scaledViewportHeight) * 0.5;
-        const Rect targetLocal = makeRect(viewportX + (sourceGlobal.x - workAreaBox.x) * scale, viewportY + (sourceGlobal.y - workAreaBox.y) * scale,
-                                          sourceGlobal.width * scale, sourceGlobal.height * scale);
+        const double targetWidth = sourceGlobal.width * scale;
+        const double targetHeight = sourceGlobal.height * scale;
+        const double targetCenterX = viewportX + (sourceGlobal.centerX() - workAreaBox.x) * scale;
+        const double targetCenterY = viewportY + (sourceGlobal.centerY() - workAreaBox.y) * scale;
+        const Rect targetLocal = makeRect(targetCenterX - targetWidth * 0.5, targetCenterY - targetHeight * 0.5, targetWidth, targetHeight);
 
         return WindowSlot{
             .index = windowIndex,
@@ -9948,6 +9946,84 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             state.slots.push_back(slots[slotIndex]);
         }
     }
+
+    const auto settleNiriFloatingOverlayOverlaps = [&]() {
+        const double gap = std::max(2.0, std::min(12.0, std::min(config.columnSpacing, config.rowSpacing) * 0.25));
+        for (const auto& candidateMonitor : activeParticipatingMonitors) {
+            if (!candidateMonitor)
+                continue;
+
+            std::vector<std::size_t> floatingIndexes;
+            for (std::size_t index = 0; index < state.windows.size(); ++index) {
+                const auto& managed = state.windows[index];
+                if (managed.targetMonitor == candidateMonitor && managed.isNiriFloatingOverlay)
+                    floatingIndexes.push_back(index);
+            }
+
+            if (floatingIndexes.size() < 2)
+                continue;
+
+            const Rect boundsLocal = overviewContentRectForMonitor(candidateMonitor, state);
+            const Rect boundsGlobal =
+                makeRect(candidateMonitor->m_position.x + boundsLocal.x, candidateMonitor->m_position.y + boundsLocal.y, boundsLocal.width, boundsLocal.height);
+            if (boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0)
+                continue;
+
+            std::vector<std::size_t> placed;
+            placed.reserve(floatingIndexes.size());
+            for (const auto index : floatingIndexes) {
+                Rect target = state.windows[index].targetGlobal;
+                bool adjusted = false;
+
+                for (std::size_t pass = 0; pass < 4; ++pass) {
+                    bool changed = false;
+                    for (const auto obstacleIndex : placed) {
+                        const Rect obstacle = inflateRect(state.windows[obstacleIndex].targetGlobal, gap, gap);
+                        if (!rectsOverlap(target, obstacle))
+                            continue;
+
+                        double directionX = target.centerX() - obstacle.centerX();
+                        double directionY = target.centerY() - obstacle.centerY();
+                        double length = std::hypot(directionX, directionY);
+                        if (length <= 0.001) {
+                            directionX = (index % 2) == 0 ? 1.0 : -1.0;
+                            directionY = (index % 3) == 0 ? 1.0 : -1.0;
+                            length = std::hypot(directionX, directionY);
+                        }
+                        directionX /= length;
+                        directionY /= length;
+
+                        if (const auto exitDistance = overlapExitDistanceAlongDirection(target, obstacle, directionX, directionY)) {
+                            target = translateRect(target, directionX * *exitDistance, directionY * *exitDistance);
+                            target = clampRectInside(target, boundsGlobal);
+                            changed = true;
+                            adjusted = true;
+                        }
+                    }
+
+                    if (!changed)
+                        break;
+                }
+
+                if (adjusted) {
+                    auto& managed = state.windows[index];
+                    managed.targetGlobal = target;
+                    managed.relayoutFromGlobal = target;
+                    managed.slot.target = makeRect(target.x - candidateMonitor->m_position.x, target.y - candidateMonitor->m_position.y, target.width, target.height);
+                    for (auto& slot : state.slots) {
+                        if (slot.index == index) {
+                            slot = managed.slot;
+                            break;
+                        }
+                    }
+                }
+
+                placed.push_back(index);
+            }
+        }
+    };
+    settleNiriFloatingOverlayOverlaps();
+
     state.participatingMonitors = std::move(activeParticipatingMonitors);
     buildWorkspaceStripEntries(state);
 
