@@ -1080,6 +1080,17 @@ Rect floatingOverviewSourceGlobalRectForWindow(const PHLWINDOW& window, const Re
     return fallbackGlobal;
 }
 
+Rect niriFloatingOverviewBaseGlobalRect(const PHLMONITOR& monitor) {
+    if (!monitor)
+        return {};
+
+    CBox box = monitor->logicalBoxMinusReserved();
+    if (box.width <= 1.0 || box.height <= 1.0)
+        box = CBox{monitor->m_position.x, monitor->m_position.y, monitor->m_size.x, monitor->m_size.y};
+
+    return makeRect(box.x, box.y, box.width, box.height);
+}
+
 std::string vectorToString(const Vector2D& value) {
     std::ostringstream out;
     out << value.x << ',' << value.y;
@@ -9764,7 +9775,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         return state.managedWorkspaces.size();
     };
-    const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
+    const auto niriOverviewSlotForSource = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal, const Rect& baseGlobal,
                                                std::size_t windowIndex) -> std::optional<WindowSlot> {
         if (state.collectionPolicy.requestedScope == ScopeOverride::ForceAll)
             return std::nullopt;
@@ -9784,21 +9795,20 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (previewArea.width <= 1.0 || previewArea.height <= 1.0)
             return std::nullopt;
 
-        const CBox workAreaBox = window->m_workspace->m_space->workArea();
-        if (workAreaBox.width <= 1.0 || workAreaBox.height <= 1.0)
+        if (baseGlobal.width <= 1.0 || baseGlobal.height <= 1.0)
             return std::nullopt;
 
-        const double fitScale = std::min(previewArea.width / workAreaBox.width, previewArea.height / workAreaBox.height);
+        const double fitScale = std::min(previewArea.width / baseGlobal.width, previewArea.height / baseGlobal.height);
         const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
         const double scale = std::max(config.minSlotScale, std::min(fitScale, maxScale));
-        const double scaledViewportWidth = workAreaBox.width * scale;
-        const double scaledViewportHeight = workAreaBox.height * scale;
+        const double scaledViewportWidth = baseGlobal.width * scale;
+        const double scaledViewportHeight = baseGlobal.height * scale;
         const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
         const double viewportY = previewArea.y + (previewArea.height - scaledViewportHeight) * 0.5;
         const double targetWidth = sourceGlobal.width * scale;
         const double targetHeight = sourceGlobal.height * scale;
-        const double targetCenterX = viewportX + (sourceGlobal.centerX() - workAreaBox.x) * scale;
-        const double targetCenterY = viewportY + (sourceGlobal.centerY() - workAreaBox.y) * scale;
+        const double targetCenterX = viewportX + (sourceGlobal.centerX() - baseGlobal.x) * scale;
+        const double targetCenterY = viewportY + (sourceGlobal.centerY() - baseGlobal.y) * scale;
         const Rect targetLocal = makeRect(targetCenterX - targetWidth * 0.5, targetCenterY - targetHeight * 0.5, targetWidth, targetHeight);
 
         return WindowSlot{
@@ -9820,7 +9830,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (!target || !target->floating())
             return std::nullopt;
 
-        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, windowIndex);
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, niriFloatingOverviewBaseGlobalRect(targetMonitor), windowIndex);
     };
     const auto niriScrollingOverviewSlotForWindow = [&](const PHLWINDOW& window, const PHLMONITOR& targetMonitor, const Rect& sourceGlobal,
                                                         std::size_t windowIndex) -> std::optional<WindowSlot> {
@@ -9828,7 +9838,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         if (!target || target->floating())
             return std::nullopt;
 
-        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, windowIndex);
+        const CBox workAreaBox = window && window->m_workspace && window->m_workspace->m_space ? window->m_workspace->m_space->workArea() : CBox{};
+        const Rect baseGlobal = makeRect(workAreaBox.x, workAreaBox.y, workAreaBox.width, workAreaBox.height);
+        return niriOverviewSlotForSource(window, targetMonitor, sourceGlobal, baseGlobal, windowIndex);
     };
 
     for (const auto& workspace : state.managedWorkspaces)
@@ -9850,7 +9862,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
         std::optional<WindowSlot> directNiriSlot;
         bool directNiriFloatingOverlay = false;
 
-        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, naturalGlobal);
+        const Rect floatingSourceGlobal = floatingOverviewSourceGlobalRectForWindow(window, sceneGlobalRectForWindow(window, useGoalGeometry));
         directNiriSlot = niriFloatingOverviewSlotForWindow(window, targetMonitor, floatingSourceGlobal, windowIndex);
         if (directNiriSlot) {
             directNiriSourceGlobal = floatingSourceGlobal;
