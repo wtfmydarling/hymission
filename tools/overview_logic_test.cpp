@@ -229,7 +229,7 @@ int main() {
     const auto niriScaledSideSlots =
         layoutNiriWorkspaceStripSlots({0, 0, 1000, 1000}, WorkspaceStripAnchor::Left, 3, std::optional<std::size_t>{1}, 50, 0, 16.0 / 9.0, 0.5);
     ok &= expect(niriScaledSideSlots.size() == 3, "niri scaled strip layout should return one rect per slot");
-    ok &= expectRect(niriScaledSideSlots[0], {250, 28.125, 500, 281.25}, "niri scaled strip should keep monitor ratio at configured overview zoom");
+    ok &= expectRect(niriScaledSideSlots[0], {250, 28.125, 500, 281.25}, "niri scaled strip should keep monitor ratio at configured strip scale");
     ok &= expectRect(niriScaledSideSlots[1], {250, 359.375, 500, 281.25}, "niri scaled strip should center active workspace without fitting all slots");
 
     const auto niriOverflowSlots =
