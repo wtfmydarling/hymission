@@ -189,6 +189,7 @@ plugin {
         multi_workspace_sort_recent_first = 1
         niri_mode = 0
         niri_scroll_pixels_per_delta = 1.0
+        niri_workspace_scale = 0.35
         toggle_switch_mode = 1
         switch_toggle_auto_next = 1
         switch_release_key = Super_L
@@ -247,7 +248,8 @@ plugin {
 | `overview_focus_follows_mouse` | bool | `1` | Keep the overview selection aligned with hover, and sync real focus when allowed. Hover retargeting is frame-coalesced for smoother animation, and multi-workspace overview stays visually anchored when real focus crosses workspaces. |
 | `multi_workspace_sort_recent_first` | bool | `1` | Multi-workspace overview only. When enabled, `forceall` and any default overview scope that spans multiple workspaces place more recently used windows earlier in the grid, filling left-to-right then top-to-bottom. |
 | `niri_mode` | bool | `0` | Enable the niri-like workspace strip layout. This is opt-in and does not change existing overview gestures. |
-| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` continuous scrolling-layout movement. |
+| `niri_scroll_pixels_per_delta` | float | `1.0` | Multiplier for `hymission:scroll,layout` continuous scrolling-layout movement and niri strip scrolling. |
+| `niri_workspace_scale` | float | `0.35` | Niri mode workspace thumbnail scale. The strip thickness grows to at least this fraction of the monitor edge, so the workspace list can overflow instead of shrinking every workspace into view. |
 | `toggle_switch_mode` | bool | `1` | Turn `hymission:toggle` into a toggle-only switch session. Intended for modifier-backed bindings such as `ALT+TAB` / `SUPER+TAB`. |
 | `switch_toggle_auto_next` | bool | `1` | Toggle switch mode only. When enabled, the first switch-mode `toggle` both opens overview and advances to the next target. |
 | `switch_release_key` | string | `Super_L` | Toggle switch mode only. Release of this key commits the current selection and closes the switch session. Supports keysym names such as `Alt_L` / `Super_L` and `code:N`, and release tracking is resilient to missing per-window release events. |
@@ -282,7 +284,7 @@ Behavior notes:
 
 The workspace strip is shown when the current overview scope displays only the active workspace.
 By default it only shows real workspaces plus the trailing new-workspace card. In `continuous` mode, synthetic empty workspaces progressively expose numbered gaps one slot at a time and render the monitor background/wallpaper when available; the trailing new-workspace card keeps its dedicated `+` styling.
-With `niri_mode = 1`, the strip keeps the configured `workspace_strip_anchor` but uses monitor-aspect workspace thumbnails and centers the active workspace in the strip when there is room.
+With `niri_mode = 1`, the strip keeps the configured `workspace_strip_anchor` but uses monitor-aspect workspace thumbnails, centers the active workspace on open, and allows the workspace list to overflow the screen. While overview is visible, `hymission:scroll,layout` scrolls this workspace list; outside overview it scrolls Hyprland's scrolling layout.
 
 ### Optional Waybar Single-Entry Setup
 

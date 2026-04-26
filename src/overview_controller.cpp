@@ -2767,6 +2767,10 @@ double OverviewController::niriScrollPixelsPerDelta() const {
     return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_scroll_pixels_per_delta", 1.0), 0.0, 20.0);
 }
 
+double OverviewController::niriWorkspaceScale() const {
+    return std::clamp(getConfigFloat(m_handle, "plugin:hymission:niri_workspace_scale", 0.35), 0.12, 0.60);
+}
+
 bool OverviewController::debugLogsEnabled() const {
     return getConfigInt(m_handle, "plugin:hymission:debug_logs", 0) != 0;
 }
@@ -2835,9 +2839,6 @@ ScrollingLayoutDirection OverviewController::scrollingLayoutDirection() const {
 }
 
 bool OverviewController::canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const {
-    if (!isScrollingWorkspace(activeLayoutWorkspace()))
-        return false;
-
     return scrollingLayoutGestureAxisMatches(scrollingLayoutDirection(), gestureAxisForDirection(direction));
 }
 
@@ -2880,6 +2881,28 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
         debugLog(std::string{"[hymission] niri layout scroll failed: "} + result.error());
 
     return result.has_value();
+}
+
+bool OverviewController::scrollNiriWorkspaceStripByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) {
+    if (!niriModeEnabled() || !workspaceStripEnabled(m_state) || m_state.stripEntries.empty())
+        return false;
+
+    const double delta = scrollLayoutPrimaryDelta(event, direction, deltaScale) * niriScrollPixelsPerDelta();
+    if (std::abs(delta) < 0.001)
+        return true;
+
+    m_niriWorkspaceStripScrollOffset += delta;
+
+    const bool horizontal = isWorkspaceStripHorizontal(parseWorkspaceStripAnchor(workspaceStripAnchor()));
+    for (auto& entry : m_state.stripEntries) {
+        if (horizontal)
+            entry.rect.x += delta;
+        else
+            entry.rect.y += delta;
+    }
+
+    damageOwnedMonitors();
+    return true;
 }
 
 double OverviewController::gestureSwipeDistance() const {
@@ -2939,13 +2962,17 @@ WorkspaceStripEmptyMode OverviewController::workspaceStripEmptyMode() const {
 }
 
 double OverviewController::workspaceStripThickness(const PHLMONITOR& monitor) const {
-    const double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 160)));
+    double raw = std::max(64.0, static_cast<double>(getConfigInt(m_handle, "plugin:hymission:workspace_strip_thickness", 160)));
     if (!monitor)
         return raw;
 
     const bool horizontal = workspaceStripAnchor() == "top";
-    const double limitRatio = niriModeEnabled() ? 0.45 : 0.35;
-    const double limit = (horizontal ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x)) * limitRatio;
+    const double crossLength = horizontal ? static_cast<double>(monitor->m_size.y) : static_cast<double>(monitor->m_size.x);
+    if (niriModeEnabled())
+        raw = std::max(raw, crossLength * niriWorkspaceScale() + 16.0);
+
+    const double limitRatio = niriModeEnabled() ? 0.60 : 0.35;
+    const double limit = crossLength * limitRatio;
     return std::clamp(raw, 64.0, std::max(64.0, limit));
 }
 
@@ -3724,8 +3751,21 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (mode != HymissionScrollMode::Layout || m_gestureSession.active || m_state.phase == Phase::Closing || m_state.phase == Phase::ClosingSettle)
         return false;
 
-    if (isVisible())
+    if (isVisible()) {
+        if (niriModeEnabled() && workspaceStripEnabled(m_state) && !m_state.stripEntries.empty()) {
+            m_scrollGestureSession = {
+                .active = true,
+                .mode = mode,
+                .route = ScrollGestureRoute::NiriWorkspaceStrip,
+                .direction = direction,
+                .deltaScale = deltaScale,
+            };
+            (void)scrollNiriWorkspaceStripByGestureDelta(event, direction, deltaScale);
+            return true;
+        }
+
         return false;
+    }
 
     if (canScrollActiveLayoutWithGesture(direction)) {
         m_scrollGestureSession = {
@@ -3749,6 +3789,9 @@ void OverviewController::updateScrollGesture(const IPointer::SSwipeUpdateEvent& 
     switch (m_scrollGestureSession.route) {
         case ScrollGestureRoute::Layout:
             (void)scrollActiveLayoutByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
+            break;
+        case ScrollGestureRoute::NiriWorkspaceStrip:
+            (void)scrollNiriWorkspaceStripByGestureDelta(event, m_scrollGestureSession.direction, m_scrollGestureSession.deltaScale);
             break;
         case ScrollGestureRoute::None:
         default:
@@ -6965,6 +7008,7 @@ void OverviewController::beginOpen(const PHLMONITOR& monitor, ScopeOverride requ
     const double fromVisual = isVisible() ? visualProgress() : 0.0;
     clearOverviewWorkspaceTransition();
     m_workspaceSwipeGesture = {};
+    m_niriWorkspaceStripScrollOffset = 0.0;
     recordWindowActivation(Desktop::focusState()->window());
     const auto preferredSelectedWindow = expandSelectedWindowEnabled() ? Desktop::focusState()->window() : PHLWINDOW{};
     State next = buildState(monitor, requestedScope, {}, false, false, preferredSelectedWindow);
@@ -8990,8 +9034,13 @@ void OverviewController::buildWorkspaceStripEntries(State& state) const {
             const double aspect = monitor->m_size.y > 0.0 ? static_cast<double>(monitor->m_size.x) / static_cast<double>(monitor->m_size.y) : (16.0 / 9.0);
             const auto slots =
                 layoutNiriWorkspaceStripSlots(band, parseWorkspaceStripAnchor(anchor), monitorEntries.size(), activeIndex, stripGap, 8.0, aspect);
-            for (std::size_t index = 0; index < std::min(slots.size(), monitorEntries.size()); ++index)
+            for (std::size_t index = 0; index < std::min(slots.size(), monitorEntries.size()); ++index) {
                 monitorEntries[index].rect = slots[index];
+                if (horizontal)
+                    monitorEntries[index].rect.x += m_niriWorkspaceStripScrollOffset;
+                else
+                    monitorEntries[index].rect.y += m_niriWorkspaceStripScrollOffset;
+            }
 
             state.stripEntries.insert(state.stripEntries.end(), monitorEntries.begin(), monitorEntries.end());
             continue;

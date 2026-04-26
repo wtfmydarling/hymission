@@ -268,6 +268,7 @@ class OverviewController {
     enum class ScrollGestureRoute {
         None,
         Layout,
+        NiriWorkspaceStrip,
     };
 
     struct ScrollGestureSession {
@@ -385,6 +386,7 @@ class OverviewController {
     [[nodiscard]] bool         showFocusIndicatorEnabled() const;
     [[nodiscard]] bool         niriModeEnabled() const;
     [[nodiscard]] double       niriScrollPixelsPerDelta() const;
+    [[nodiscard]] double       niriWorkspaceScale() const;
     [[nodiscard]] bool         debugLogsEnabled() const;
     [[nodiscard]] bool         debugSurfaceLogsEnabled() const;
     [[nodiscard]] PHLWORKSPACE activeLayoutWorkspace() const;
@@ -395,6 +397,7 @@ class OverviewController {
     [[nodiscard]] bool         canScrollActiveLayoutWithGesture(eTrackpadGestureDirection direction) const;
     [[nodiscard]] double       scrollLayoutPrimaryDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale) const;
     [[nodiscard]] bool         scrollActiveLayoutByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
+    [[nodiscard]] bool         scrollNiriWorkspaceStripByGestureDelta(const IPointer::SSwipeUpdateEvent& event, eTrackpadGestureDirection direction, float deltaScale);
     [[nodiscard]] bool         shouldSyncRealFocusDuringOverview() const;
     [[nodiscard]] bool         allowsWorkspaceSwitchInOverview() const;
     [[nodiscard]] bool         shouldBlockWorkspaceSwitchInOverview() const;
@@ -679,6 +682,7 @@ class OverviewController {
     std::size_t              m_stripSnapshotRenderDepth = 0;
     bool                     m_stripSnapshotsDirty = false;
     bool                     m_stripSnapshotRefreshScheduled = false;
+    double                   m_niriWorkspaceStripScrollOffset = 0.0;
     bool                     m_primaryButtonPressed = false;
     std::optional<std::size_t> m_pressedStripIndex;
     std::optional<std::size_t> m_pressedWindowIndex;

@@ -212,6 +212,7 @@ gesture-only 参数：
 - 上述 workspace gesture 必须复用当前 Hyprland 本地实现的 `workspace_swipe_distance`、`workspace_swipe_invert`、`workspace_swipe_min_speed_to_force`、`workspace_swipe_cancel_ratio`、`workspace_swipe_create_new`、`workspace_swipe_direction_lock`、`workspace_swipe_direction_lock_threshold`、`workspace_swipe_forever`、`workspace_swipe_use_r` 和 `general:gaps_workspaces`
 - overview 内的 workspace gesture 中间帧不得出现原生普通 workspace 切换动画；屏幕上只能看到 source overview 与 target overview 的滑动过渡
 - `hymission:scroll,layout` 按 `scrolling:direction = right|left|down|up` 选择匹配轴，并连续调用 scrolling layout 的 `move +/-N`
+- overview 可见且 `niri_mode = 1` 时，`hymission:scroll,layout` 改为滚动 niri-like workspace strip，而不是切换 workspace
 - `hymission:scroll` 不提供 workspace 子模式；workspace swipe 统一使用标准 `gesture = ..., workspace`
 
 ### 6.2 鼠标
@@ -314,6 +315,7 @@ workspace 切换补充语义：
 - `overview_focus_follows_mouse`
 - `niri_mode`
 - `niri_scroll_pixels_per_delta`
+- `niri_workspace_scale`
 - `gesture_invert_vertical`
 - `only_active_workspace`
 - `only_active_monitor`
@@ -334,13 +336,14 @@ workspace 切换补充语义：
 - `expand_selected_window` 让 overview 当前选中项在布局阶段获得额外权重，从而放大并挤开相邻 preview；它依赖 `selectedIndex`，因此在 `overview_focus_follows_mouse = 1` 时通常也会跟随 hover 触发 relayout
 - `overview_focus_follows_mouse` 控制 overview 内部选中项是否跟随鼠标，以及在允许时是否把当前选中项实时同步到真实 focus；当 overview 打开前 `input:follow_mouse = 0` 时，它退化为“只改 overview 内部选中项 + 退出时提交”
 - `niri_mode` 默认关闭；打开后让 workspace strip 使用 active-centered、允许溢出屏幕的 niri-like 布局
-- `niri_scroll_pixels_per_delta` 只影响 `hymission:scroll,layout` 的连续 `layoutMsg move` 幅度
+- `niri_scroll_pixels_per_delta` 影响 `hymission:scroll,layout` 的连续 `layoutMsg move` 幅度和 overview 内 niri strip 滚动幅度
+- `niri_workspace_scale` 控制 niri mode 下 workspace 缩略图相对 monitor 的比例；它会抬高 strip thickness 下限，避免 `workspace_strip_thickness = 160` 这类旧配置把所有 workspace 强行塞进屏幕内
 - `gesture_invert_vertical` 只影响被插件接管的 vertical overview gesture；它不改变普通 dispatcher、键盘输入或 Hyprland 其他 gesture 的方向
 - 如果退出 overview 时提交的真实目标窗口仍不在屏内，允许临时保持该窗口为真实 focus，直到下一次真实鼠标事件；只有当目标窗口在当前 monitor 上存在可见区域时，才允许顺带移动光标去对齐真实 focus
 - `only_active_workspace`、`only_active_monitor`、`show_special` 只影响默认 scope；`onlycurrentworkspace` 和 `forceall` dispatcher 参数优先级更高
 - `workspace_strip_anchor`、`workspace_strip_empty_mode`、`workspace_strip_thickness` 和 `workspace_strip_gap` 只在当前 overview scope 只展示活动 workspace 时生效
 - `workspace_strip_empty_mode` 当前只支持 `existing` 和 `continuous`；默认值为 `existing`
-- `niri_mode = 1` 不自动改变 strip anchor；strip 仍由 `workspace_strip_anchor` 控制，但 slot 采用 monitor aspect ratio，尽量把 active workspace 居中，并允许前后 workspace 超出屏幕边界
+- `niri_mode = 1` 不自动改变 strip anchor；strip 仍由 `workspace_strip_anchor` 控制，但 slot 采用 monitor aspect ratio，打开时尽量把 active workspace 居中，并允许前后 workspace 超出屏幕边界
 - `workspace_change_keeps_overview` 只在当前 overview scope 只展示活动 workspace 时生效；当前 scope 同时展示多个 workspace 时，workspace 切换必须被禁止
 - `workspace_change_keeps_overview = 1` 时，workspace 切换的视觉语义是 overview-to-overview 过渡，而不是普通 workspace 动画 + overview 重建
 - `bar_single_mission_control` 只在当前 overview scope 同时展示多个 workspace 时生效；默认建议保持 `0`，这样 bar 继续显示正常的编号 workspace；`1` 时通过临时 workspace rename 为外部 bar 提供“只保留一个 Mission Control 项”的过滤前缀，不承诺对 shell / dock 做更深的直接集成
