@@ -10001,14 +10001,23 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
             if (boundsGlobal.width <= 1.0 || boundsGlobal.height <= 1.0)
                 continue;
 
-            std::vector<Rect> staticRects;
+            std::size_t staticObstacleCount = 0;
             std::vector<Rect> placedFloatingRects;
-            staticRects.reserve(state.windows.size());
             placedFloatingRects.reserve(floatingIndexes.size());
             for (const auto& managed : state.windows) {
                 if (managed.targetMonitor == candidateMonitor && !managed.isNiriFloatingOverlay)
-                    staticRects.push_back(inflateRect(managed.targetGlobal, gap, gap));
+                    ++staticObstacleCount;
             }
+
+            std::stable_sort(floatingIndexes.begin(), floatingIndexes.end(), [&](std::size_t lhs, std::size_t rhs) {
+                const Rect& lhsRect = state.windows[lhs].targetGlobal;
+                const Rect& rhsRect = state.windows[rhs].targetGlobal;
+                const double lhsArea = lhsRect.width * lhsRect.height;
+                const double rhsArea = rhsRect.width * rhsRect.height;
+                if (std::abs(lhsArea - rhsArea) > 1.0)
+                    return lhsArea > rhsArea;
+                return lhs < rhs;
+            });
 
             const auto overlapArea = [](const Rect& lhs, const Rect& rhs) {
                 const double x1 = std::max(lhs.x, rhs.x);
@@ -10020,101 +10029,119 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 return (x2 - x1) * (y2 - y1);
             };
 
-            const auto resolveFloatingTarget = [&](const Rect& desired, const std::vector<Rect>& obstacles, double maxCenterShift) -> Rect {
+            const auto totalOverlapArea = [&](const Rect& target, const std::vector<Rect>& obstacles) {
+                double overlap = 0.0;
+                for (const auto& obstacle : obstacles)
+                    overlap += overlapArea(target, obstacle);
+                return overlap;
+            };
+
+            struct FloatingResolveResult {
+                Rect   target;
+                double scale = 1.0;
+                double overlap = 0.0;
+            };
+
+            const auto resolveFloatingTarget = [&](const Rect& desired, const std::vector<Rect>& obstacles, double currentSlotScale) -> FloatingResolveResult {
+                const Rect clampedDesired = clampRectInside(desired, boundsGlobal);
                 if (obstacles.empty())
-                    return clampRectInside(desired, boundsGlobal);
+                    return {.target = clampedDesired, .scale = 1.0, .overlap = 0.0};
 
                 std::vector<Rect> candidates;
-                candidates.reserve(obstacles.size() * 14 + 8);
-                const auto appendCandidate = [&](const Rect& candidate) {
+                std::vector<double> candidateScales;
+                candidates.reserve(128);
+                candidateScales.reserve(128);
+                const auto appendCandidate = [&](const Rect& candidate, double scale) {
                     const Rect clamped = clampRectInside(candidate, boundsGlobal);
                     if (std::ranges::any_of(candidates, [&](const Rect& existing) { return rectApproxEqual(existing, clamped, 0.5); }))
                         return;
                     candidates.push_back(clamped);
+                    candidateScales.push_back(scale);
                 };
 
-                appendCandidate(desired);
-                appendCandidate(makeRect(boundsGlobal.x, desired.y, desired.width, desired.height));
-                appendCandidate(makeRect(boundsGlobal.x + boundsGlobal.width - desired.width, desired.y, desired.width, desired.height));
-                appendCandidate(makeRect(desired.x, boundsGlobal.y, desired.width, desired.height));
-                appendCandidate(makeRect(desired.x, boundsGlobal.y + boundsGlobal.height - desired.height, desired.width, desired.height));
-                appendCandidate(makeRect(boundsGlobal.x, boundsGlobal.y, desired.width, desired.height));
-                appendCandidate(makeRect(boundsGlobal.x + boundsGlobal.width - desired.width, boundsGlobal.y, desired.width, desired.height));
-                appendCandidate(makeRect(boundsGlobal.x, boundsGlobal.y + boundsGlobal.height - desired.height, desired.width, desired.height));
-                appendCandidate(makeRect(boundsGlobal.x + boundsGlobal.width - desired.width, boundsGlobal.y + boundsGlobal.height - desired.height, desired.width,
-                                         desired.height));
+                const double absoluteScaleFloor = std::max(0.30, config.minSlotScale);
+                const double scaleFloorBySlot = currentSlotScale > 0.001 ? absoluteScaleFloor / currentSlotScale : 0.72;
+                const double scaleFloorByReadableSize =
+                    config.minPreviewShortEdge / std::max(1.0, std::min(clampedDesired.width, clampedDesired.height));
+                const double scaleFloor = std::min(1.0, std::max({0.72, scaleFloorBySlot, scaleFloorByReadableSize}));
 
-                for (const auto& obstacle : obstacles) {
-                    const double centeredX = obstacle.centerX() - desired.width * 0.5;
-                    const double centeredY = obstacle.centerY() - desired.height * 0.5;
-                    appendCandidate(makeRect(obstacle.x - desired.width, desired.y, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x + obstacle.width, desired.y, desired.width, desired.height));
-                    appendCandidate(makeRect(desired.x, obstacle.y - desired.height, desired.width, desired.height));
-                    appendCandidate(makeRect(desired.x, obstacle.y + obstacle.height, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x - desired.width, centeredY, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x + obstacle.width, centeredY, desired.width, desired.height));
-                    appendCandidate(makeRect(centeredX, obstacle.y - desired.height, desired.width, desired.height));
-                    appendCandidate(makeRect(centeredX, obstacle.y + obstacle.height, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x - desired.width, obstacle.y - desired.height, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x + obstacle.width, obstacle.y - desired.height, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x - desired.width, obstacle.y + obstacle.height, desired.width, desired.height));
-                    appendCandidate(makeRect(obstacle.x + obstacle.width, obstacle.y + obstacle.height, desired.width, desired.height));
+                std::vector<double> scales;
+                scales.push_back(1.0);
+                for (double scale = 0.96; scale > scaleFloor + 0.001; scale -= 0.04)
+                    scales.push_back(scale);
+                if (scales.back() > scaleFloor + 0.001)
+                    scales.push_back(scaleFloor);
+
+                std::vector<std::pair<double, double>> offsets;
+                offsets.push_back({0.0, 0.0});
+                const double maxNudge = std::max(8.0, std::min(72.0, std::min(boundsGlobal.width, boundsGlobal.height) * 0.04));
+                for (double radius : {gap, gap * 2.0, 16.0, 32.0, maxNudge}) {
+                    if (radius <= 0.5 || radius > maxNudge + 0.5)
+                        continue;
+                    offsets.push_back({radius, 0.0});
+                    offsets.push_back({-radius, 0.0});
+                    offsets.push_back({0.0, radius});
+                    offsets.push_back({0.0, -radius});
+                    const double diagonal = radius * 0.70710678118;
+                    offsets.push_back({diagonal, diagonal});
+                    offsets.push_back({diagonal, -diagonal});
+                    offsets.push_back({-diagonal, diagonal});
+                    offsets.push_back({-diagonal, -diagonal});
+                }
+
+                for (const double scale : scales) {
+                    const double width = clampedDesired.width * scale;
+                    const double height = clampedDesired.height * scale;
+                    for (const auto& [dx, dy] : offsets) {
+                        appendCandidate(makeRect(clampedDesired.centerX() + dx - width * 0.5, clampedDesired.centerY() + dy - height * 0.5, width, height), scale);
+                    }
                 }
 
                 const bool desiredOnRight = desired.centerX() >= boundsGlobal.centerX();
                 const bool desiredOnBottom = desired.centerY() >= boundsGlobal.centerY();
                 const double boundsDiag2 = boundsGlobal.width * boundsGlobal.width + boundsGlobal.height * boundsGlobal.height;
-                const bool limitShift = std::isfinite(maxCenterShift);
 
-                Rect   best = candidates.empty() ? clampRectInside(desired, boundsGlobal) : candidates.front();
-                double bestOverlap = std::numeric_limits<double>::max();
+                FloatingResolveResult best{
+                    .target = clampedDesired,
+                    .scale = 1.0,
+                    .overlap = totalOverlapArea(clampedDesired, obstacles),
+                };
                 double bestScore = std::numeric_limits<double>::max();
-                for (const auto& candidate : candidates) {
+                for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex) {
+                    const auto& candidate = candidates[candidateIndex];
+                    const double scale = candidateIndex < candidateScales.size() ? candidateScales[candidateIndex] : 1.0;
                     const double dx = candidate.centerX() - desired.centerX();
                     const double dy = candidate.centerY() - desired.centerY();
                     const double distance2 = dx * dx + dy * dy;
-                    const double distance = std::sqrt(distance2);
-                    if (limitShift && distance > maxCenterShift)
-                        continue;
+                    const double totalOverlap = totalOverlapArea(candidate, obstacles);
+                    const double shrink = std::max(0.0, 1.0 - scale);
 
-                    double totalOverlap = 0.0;
-                    for (const auto& obstacle : obstacles)
-                        totalOverlap += overlapArea(candidate, obstacle);
-
-                    double score = distance2 + totalOverlap * 1000000.0;
+                    double score = distance2 + shrink * shrink * 45000.0;
                     if ((candidate.centerX() >= boundsGlobal.centerX()) != desiredOnRight)
                         score += boundsDiag2 * 4.0;
                     if ((candidate.centerY() >= boundsGlobal.centerY()) != desiredOnBottom)
                         score += boundsDiag2;
 
-                    if (totalOverlap < bestOverlap - 0.5 || (std::abs(totalOverlap - bestOverlap) <= 0.5 && score < bestScore)) {
-                        best = candidate;
-                        bestOverlap = totalOverlap;
+                    if (totalOverlap < best.overlap - 0.5 || (std::abs(totalOverlap - best.overlap) <= 0.5 && score < bestScore)) {
+                        best = {.target = candidate, .scale = scale, .overlap = totalOverlap};
                         bestScore = score;
                     }
                 }
-
-                if (limitShift && bestOverlap > 0.5)
-                    return clampRectInside(desired, boundsGlobal);
 
                 return best;
             };
 
             for (const auto index : floatingIndexes) {
                 const Rect desired = state.windows[index].targetGlobal;
-                Rect       target = resolveFloatingTarget(desired, placedFloatingRects, std::numeric_limits<double>::infinity());
+                const auto resolved = resolveFloatingTarget(desired, placedFloatingRects, state.windows[index].slot.scale);
+                const Rect target = resolved.target;
 
-                std::vector<Rect> allObstacles = staticRects;
-                allObstacles.insert(allObstacles.end(), placedFloatingRects.begin(), placedFloatingRects.end());
-                const double maxSoftShift = std::max(24.0, std::min(180.0, std::min(boundsGlobal.width, boundsGlobal.height) * 0.10));
-                const Rect softTarget = resolveFloatingTarget(target, allObstacles, maxSoftShift);
-                target = softTarget;
-
-                if (!rectApproxEqual(target, desired, 0.5)) {
+                if (!rectApproxEqual(target, desired, 0.5) || std::abs(resolved.scale - 1.0) > 0.001) {
                     auto& managed = state.windows[index];
                     managed.targetGlobal = target;
                     managed.relayoutFromGlobal = target;
                     managed.slot.target = makeRect(target.x - candidateMonitor->m_position.x, target.y - candidateMonitor->m_position.y, target.width, target.height);
+                    managed.slot.scale *= resolved.scale;
                     for (auto& slot : state.slots) {
                         if (slot.index == index) {
                             slot = managed.slot;
@@ -10127,7 +10154,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                         out << "[hymission] niri floating overview adjust window=" << debugWindowLabel(managed.window)
                             << " desired=" << rectToString(desired)
                             << " target=" << rectToString(target)
-                            << " staticObstacles=" << staticRects.size()
+                            << " scaleAdjust=" << resolved.scale
+                            << " remainingOverlap=" << resolved.overlap
+                            << " staticObstaclesIgnored=" << staticObstacleCount
                             << " floatingObstacles=" << placedFloatingRects.size();
                         debugLog(out.str());
                     }
