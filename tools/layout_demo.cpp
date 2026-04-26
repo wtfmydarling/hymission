@@ -45,6 +45,16 @@ struct LayoutMetrics {
     double minScale = std::numeric_limits<double>::infinity();
     double averageScale = 0.0;
     double targetAreaRatio = 0.0;
+    double targetCentroidX = 0.0;
+    double targetCentroidY = 0.0;
+    double gravityOffset = 0.0;
+    double averageMotion = 0.0;
+    double maxMotion = 0.0;
+    double heatMax = 0.0;
+    double heatStdDev = 0.0;
+    double heatImbalance = 0.0;
+    std::size_t xInversions = 0;
+    std::size_t yInversions = 0;
     double score = 0.0;
 };
 
@@ -56,6 +66,7 @@ struct StressResult {
 };
 
 void printSlots(const std::vector<WindowSlot>& slots);
+void printMetrics(const LayoutMetrics& metrics);
 
 std::string escapeXml(std::string_view value) {
     std::string escaped;
@@ -310,28 +321,123 @@ double outsideArea(const Rect& rect, const Rect& area) {
     return std::max(0.0, rect.width * rect.height - insideWidth * insideHeight);
 }
 
-LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& area) {
+double centerDistance(const Rect& lhs, const Rect& rhs) {
+    return std::hypot(lhs.centerX() - rhs.centerX(), lhs.centerY() - rhs.centerY());
+}
+
+std::vector<double> heatCells(const std::vector<WindowSlot>& slots, const Rect& area, int columns = 4, int rows = 3) {
+    std::vector<double> heat(static_cast<std::size_t>(columns * rows), 0.0);
+    const double        cellWidth = area.width / static_cast<double>(columns);
+    const double        cellHeight = area.height / static_cast<double>(rows);
+    const double        cellArea = std::max(1.0, cellWidth * cellHeight);
+
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const Rect cell{
+                area.x + static_cast<double>(column) * cellWidth,
+                area.y + static_cast<double>(row) * cellHeight,
+                cellWidth,
+                cellHeight,
+            };
+
+            double covered = 0.0;
+            for (const auto& slot : slots)
+                covered += intersectionArea(slot.target, cell);
+            heat[static_cast<std::size_t>(row * columns + column)] = covered / cellArea;
+        }
+    }
+
+    return heat;
+}
+
+LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& area, const std::vector<WindowInput>& windows) {
     LayoutMetrics metrics;
     double        totalTargetArea = 0.0;
+    double        weightedX = 0.0;
+    double        weightedY = 0.0;
+    const double  diagonal = std::max(1.0, std::hypot(area.width, area.height));
 
     for (std::size_t i = 0; i < slots.size(); ++i) {
+        const auto* window = findWindow(windows, slots[i].index);
+        const double slotArea = slots[i].target.width * slots[i].target.height;
         metrics.minScale = std::min(metrics.minScale, slots[i].scale);
         metrics.averageScale += slots[i].scale;
-        totalTargetArea += slots[i].target.width * slots[i].target.height;
+        totalTargetArea += slotArea;
+        weightedX += slots[i].target.centerX() * slotArea;
+        weightedY += slots[i].target.centerY() * slotArea;
         metrics.outOfBoundsArea += outsideArea(slots[i].target, area);
+        if (window) {
+            const double motion = centerDistance(window->natural, slots[i].target) / diagonal;
+            metrics.averageMotion += motion;
+            metrics.maxMotion = std::max(metrics.maxMotion, motion);
+        }
 
-        for (std::size_t j = i + 1; j < slots.size(); ++j)
+        for (std::size_t j = i + 1; j < slots.size(); ++j) {
             metrics.overlapArea += intersectionArea(slots[i].target, slots[j].target);
+            const auto* lhs = findWindow(windows, slots[i].index);
+            const auto* rhs = findWindow(windows, slots[j].index);
+            if (!lhs || !rhs)
+                continue;
+
+            const double sourceDx = lhs->natural.centerX() - rhs->natural.centerX();
+            const double targetDx = slots[i].target.centerX() - slots[j].target.centerX();
+            const double sourceDy = lhs->natural.centerY() - rhs->natural.centerY();
+            const double targetDy = slots[i].target.centerY() - slots[j].target.centerY();
+            if (sourceDx * targetDx < 0.0)
+                ++metrics.xInversions;
+            if (sourceDy * targetDy < 0.0)
+                ++metrics.yInversions;
+        }
     }
 
     if (!slots.empty()) {
         metrics.averageScale /= static_cast<double>(slots.size());
+        metrics.averageMotion /= static_cast<double>(slots.size());
     } else {
         metrics.minScale = 0.0;
     }
 
     const double areaPixels = std::max(1.0, area.width * area.height);
     metrics.targetAreaRatio = totalTargetArea / areaPixels;
+    if (totalTargetArea > 0.0) {
+        metrics.targetCentroidX = weightedX / totalTargetArea;
+        metrics.targetCentroidY = weightedY / totalTargetArea;
+        metrics.gravityOffset = std::hypot(metrics.targetCentroidX - area.centerX(), metrics.targetCentroidY - area.centerY()) / diagonal;
+    } else {
+        metrics.targetCentroidX = area.centerX();
+        metrics.targetCentroidY = area.centerY();
+    }
+
+    const auto heat = heatCells(slots, area);
+    if (!heat.empty()) {
+        double mean = 0.0;
+        double left = 0.0;
+        double right = 0.0;
+        double top = 0.0;
+        double bottom = 0.0;
+
+        for (std::size_t i = 0; i < heat.size(); ++i) {
+            metrics.heatMax = std::max(metrics.heatMax, heat[i]);
+            mean += heat[i];
+            const int row = static_cast<int>(i / 4);
+            const int column = static_cast<int>(i % 4);
+            if (column < 2)
+                left += heat[i];
+            else
+                right += heat[i];
+            if (row == 0)
+                top += heat[i];
+            if (row == 2)
+                bottom += heat[i];
+        }
+        mean /= static_cast<double>(heat.size());
+
+        for (const auto value : heat)
+            metrics.heatStdDev += (value - mean) * (value - mean);
+        metrics.heatStdDev = std::sqrt(metrics.heatStdDev / static_cast<double>(heat.size()));
+        metrics.heatImbalance = std::abs(left - right) + std::abs(top - bottom);
+    }
+
     metrics.score = metrics.overlapArea * 200.0 + metrics.outOfBoundsArea * 200.0;
     if (metrics.minScale < 0.08)
         metrics.score += (0.08 - metrics.minScale) * 1000000.0;
@@ -339,6 +445,11 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.score += (0.18 - metrics.averageScale) * 250000.0;
     if (metrics.targetAreaRatio < 0.12 && slots.size() <= 10)
         metrics.score += (0.12 - metrics.targetAreaRatio) * 100000.0;
+    metrics.score += metrics.gravityOffset * 40000.0;
+    metrics.score += metrics.heatStdDev * 30000.0;
+    metrics.score += metrics.heatImbalance * 2500.0;
+    metrics.score += static_cast<double>(metrics.xInversions + metrics.yInversions) * 400.0;
+    metrics.score += metrics.averageMotion * 3000.0;
 
     return metrics;
 }
@@ -469,7 +580,7 @@ StressResult runStress(const Options& options) {
     for (std::size_t i = 0; i < options.stressCases; ++i) {
         auto scene = randomStressScene(rng, i);
         auto slots = engine.compute(scene.windows, scene.area, baseConfig);
-        auto metrics = measureLayout(slots, insetArea(scene.area, baseConfig));
+        auto metrics = measureLayout(slots, insetArea(scene.area, baseConfig), scene.windows);
         if (metrics.score > worst.metrics.score) {
             worst = {
                 .caseIndex = i,
@@ -487,12 +598,8 @@ void printStressResult(const StressResult& result) {
     std::cout << "worst case #" << result.caseIndex << " scene=" << result.scene.name << '\n'
               << "windows=" << result.scene.windows.size() << " area="
               << static_cast<int>(result.scene.area.width) << 'x' << static_cast<int>(result.scene.area.height) << '\n'
-              << "score=" << std::fixed << std::setprecision(2) << result.metrics.score
-              << " overlapArea=" << result.metrics.overlapArea
-              << " outOfBoundsArea=" << result.metrics.outOfBoundsArea
-              << " minScale=" << std::setprecision(3) << result.metrics.minScale
-              << " averageScale=" << result.metrics.averageScale
-              << " targetAreaRatio=" << result.metrics.targetAreaRatio << '\n';
+              << std::fixed << std::setprecision(3);
+    printMetrics(result.metrics);
 
     for (const auto& window : result.scene.windows) {
         std::cout << "input #" << window.index << ' '
@@ -529,6 +636,26 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
         << "\" fill=\"none\" stroke=\"#0284c7\" stroke-width=\"2\" stroke-dasharray=\"10 8\" opacity=\"0.7\"/>\n";
     out << "<text x=\"" << inner.x << "\" y=\"" << (inner.y - 18) << "\" font-family=\"monospace\" font-size=\"18\" fill=\"#0f172a\">"
         << escapeXml(scene.name) << " / " << engineName(config.engine) << "</text>\n";
+
+    const auto metrics = measureLayout(slots, inner, scene.windows);
+    const auto heat = heatCells(slots, inner);
+    const double cellWidth = inner.width / 4.0;
+    const double cellHeight = inner.height / 3.0;
+    for (std::size_t i = 0; i < heat.size(); ++i) {
+        const int row = static_cast<int>(i / 4);
+        const int column = static_cast<int>(i % 4);
+        const double opacity = std::clamp(heat[i] * 0.55, 0.0, 0.32);
+        if (opacity <= 0.001)
+            continue;
+        out << "<rect x=\"" << (inner.x + static_cast<double>(column) * cellWidth) << "\" y=\""
+            << (inner.y + static_cast<double>(row) * cellHeight) << "\" width=\"" << cellWidth << "\" height=\"" << cellHeight
+            << "\" fill=\"#ef4444\" opacity=\"" << opacity << "\"/>\n";
+    }
+    out << "<line x1=\"" << inner.centerX() - 14.0 << "\" y1=\"" << inner.centerY() << "\" x2=\"" << inner.centerX() + 14.0 << "\" y2=\""
+        << inner.centerY() << "\" stroke=\"#0f172a\" stroke-width=\"2\" opacity=\"0.45\"/>\n";
+    out << "<line x1=\"" << inner.centerX() << "\" y1=\"" << inner.centerY() - 14.0 << "\" x2=\"" << inner.centerX() << "\" y2=\""
+        << inner.centerY() + 14.0 << "\" stroke=\"#0f172a\" stroke-width=\"2\" opacity=\"0.45\"/>\n";
+    out << "<circle cx=\"" << metrics.targetCentroidX << "\" cy=\"" << metrics.targetCentroidY << "\" r=\"9\" fill=\"#f97316\" stroke=\"#7c2d12\" stroke-width=\"2\"/>\n";
 
     for (const auto& window : scene.windows) {
         const auto color = colorFor(window.index);
@@ -570,6 +697,11 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
 
     out << "<text x=\"" << (inner.x + inner.width - 520) << "\" y=\"" << (inner.y - 18)
         << "\" font-family=\"monospace\" font-size=\"14\" fill=\"#334155\">dashed = source window geometry, solid = solved overview target</text>\n";
+    out << "<text x=\"" << inner.x << "\" y=\"" << (inner.y + inner.height + 22)
+        << "\" font-family=\"monospace\" font-size=\"14\" fill=\"#334155\">gravity=" << std::setprecision(3) << metrics.gravityOffset
+        << " heatMax=" << metrics.heatMax << " heatStdDev=" << metrics.heatStdDev << " heatImbalance=" << metrics.heatImbalance
+        << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion << " inv(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
+        << "</text>\n";
     out << "</svg>\n";
 }
 
@@ -583,6 +715,24 @@ void printSlots(const std::vector<WindowSlot>& slots) {
                   << " scale=" << std::fixed << std::setprecision(3) << slot.scale
                   << '\n';
     }
+}
+
+void printMetrics(const LayoutMetrics& metrics) {
+    std::cout << "metrics"
+              << " score=" << std::fixed << std::setprecision(2) << metrics.score
+              << " overlapArea=" << metrics.overlapArea
+              << " outOfBoundsArea=" << metrics.outOfBoundsArea
+              << " minScale=" << std::setprecision(3) << metrics.minScale
+              << " averageScale=" << metrics.averageScale
+              << " targetAreaRatio=" << metrics.targetAreaRatio
+              << " gravityOffset=" << metrics.gravityOffset
+              << " centroid=" << static_cast<int>(metrics.targetCentroidX) << "," << static_cast<int>(metrics.targetCentroidY)
+              << " heatMax=" << metrics.heatMax
+              << " heatStdDev=" << metrics.heatStdDev
+              << " heatImbalance=" << metrics.heatImbalance
+              << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion
+              << " inversions(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
+              << '\n';
 }
 
 } // namespace
@@ -618,6 +768,7 @@ int main(int argc, char** argv) {
     const auto            slots = engine.compute(scene.windows, scene.area, config);
 
     printSlots(slots);
+    printMetrics(measureLayout(slots, insetArea(scene.area, config), scene.windows));
     if (options.outputPath) {
         writeSvg(*options.outputPath, scene, config, slots);
         std::cout << "wrote " << *options.outputPath << '\n';

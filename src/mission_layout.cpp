@@ -78,7 +78,7 @@ double naturalFitScaleForWindow(const PreparedWindow& window, const Rect& area) 
 }
 
 bool naturalSolverAllowedForCount(std::size_t count) {
-    return count <= 80;
+    return count <= 24;
 }
 
 double clampLayoutScale(double value, const LayoutConfig& config) {
@@ -443,7 +443,7 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     std::vector<NaturalItem> items;
     items.reserve(prepared.size());
 
-    constexpr double anchorSpread = 0.78;
+    constexpr double anchorSpread = 0.62;
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
     const auto       overlapRanks = buildNaturalOverlapRanks(prepared);
     int              overlapCount = 0;
@@ -586,19 +586,30 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     double minY = std::numeric_limits<double>::infinity();
     double maxX = -std::numeric_limits<double>::infinity();
     double maxY = -std::numeric_limits<double>::infinity();
+    double weightedX = 0.0;
+    double weightedY = 0.0;
+    double totalArea = 0.0;
 
     for (const auto& slot : slots) {
         minX = std::min(minX, slot.target.x);
         minY = std::min(minY, slot.target.y);
         maxX = std::max(maxX, slot.target.x + slot.target.width);
         maxY = std::max(maxY, slot.target.y + slot.target.height);
+        const double area = slot.target.width * slot.target.height;
+        weightedX += slot.target.centerX() * area;
+        weightedY += slot.target.centerY() * area;
+        totalArea += area;
     }
 
     const double boundsWidth = maxX - minX;
     const double boundsHeight = maxY - minY;
 
-    const double desiredDx = area.centerX() - (minX + maxX) / 2.0;
-    const double desiredDy = area.centerY() - (minY + maxY) / 2.0;
+    const double boundsCenterX = (minX + maxX) / 2.0;
+    const double boundsCenterY = (minY + maxY) / 2.0;
+    const double visualCenterX = totalArea > 0.0 ? weightedX / totalArea : boundsCenterX;
+    const double visualCenterY = totalArea > 0.0 ? weightedY / totalArea : boundsCenterY;
+    const double desiredDx = area.centerX() - (visualCenterX * 0.65 + boundsCenterX * 0.35);
+    const double desiredDy = area.centerY() - (visualCenterY * 0.65 + boundsCenterY * 0.35);
     const double minDx = area.x - minX;
     const double maxDx = area.x + area.width - maxX;
     const double minDy = area.y - minY;
