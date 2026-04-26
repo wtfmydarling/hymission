@@ -2460,6 +2460,16 @@ bool OverviewController::shouldRenderWindowHook(const PHLWINDOW& window, const P
         return true;
     }
 
+    if (isVisible() && niriModeEnabled() && window && monitor && ownsMonitor(monitor) && !hasManagedWindow(window) && window->onSpecialWorkspace() &&
+        isFloatingOverviewWindow(window)) {
+        if (debugLogsEnabled()) {
+            std::ostringstream out;
+            out << "[hymission] hide niri special floating live window " << debugWindowLabel(window) << " monitor=" << monitor->m_name;
+            debugLog(out.str());
+        }
+        return false;
+    }
+
     return m_shouldRenderWindowOriginal(g_pHyprRenderer.get(), window, monitor);
 }
 
@@ -10072,26 +10082,50 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 if (scales.back() > scaleFloor + 0.001)
                     scales.push_back(scaleFloor);
 
-                std::vector<std::pair<double, double>> offsets;
-                offsets.push_back({0.0, 0.0});
+                std::vector<std::pair<double, double>> baseOffsets;
+                baseOffsets.push_back({0.0, 0.0});
                 const double maxNudge = std::max(8.0, std::min(72.0, std::min(boundsGlobal.width, boundsGlobal.height) * 0.04));
                 for (double radius : {gap, gap * 2.0, 16.0, 32.0, maxNudge}) {
                     if (radius <= 0.5 || radius > maxNudge + 0.5)
                         continue;
-                    offsets.push_back({radius, 0.0});
-                    offsets.push_back({-radius, 0.0});
-                    offsets.push_back({0.0, radius});
-                    offsets.push_back({0.0, -radius});
+                    baseOffsets.push_back({radius, 0.0});
+                    baseOffsets.push_back({-radius, 0.0});
+                    baseOffsets.push_back({0.0, radius});
+                    baseOffsets.push_back({0.0, -radius});
                     const double diagonal = radius * 0.70710678118;
-                    offsets.push_back({diagonal, diagonal});
-                    offsets.push_back({diagonal, -diagonal});
-                    offsets.push_back({-diagonal, diagonal});
-                    offsets.push_back({-diagonal, -diagonal});
+                    baseOffsets.push_back({diagonal, diagonal});
+                    baseOffsets.push_back({diagonal, -diagonal});
+                    baseOffsets.push_back({-diagonal, diagonal});
+                    baseOffsets.push_back({-diagonal, -diagonal});
                 }
 
                 for (const double scale : scales) {
                     const double width = clampedDesired.width * scale;
                     const double height = clampedDesired.height * scale;
+                    std::vector<std::pair<double, double>> offsets = baseOffsets;
+                    const auto appendOffset = [&](double dx, double dy) {
+                        offsets.push_back({dx, dy});
+                    };
+                    for (const auto& obstacle : obstacles) {
+                        const Rect scaledDesired =
+                            makeRect(clampedDesired.centerX() - width * 0.5, clampedDesired.centerY() - height * 0.5, width, height);
+                        if (!rectsOverlap(scaledDesired, obstacle))
+                            continue;
+
+                        const double moveRight = obstacle.x + obstacle.width - scaledDesired.x;
+                        const double moveLeft = obstacle.x - (scaledDesired.x + scaledDesired.width);
+                        const double moveDown = obstacle.y + obstacle.height - scaledDesired.y;
+                        const double moveUp = obstacle.y - (scaledDesired.y + scaledDesired.height);
+
+                        if (std::abs(moveRight) <= maxNudge + 0.5)
+                            appendOffset(moveRight, 0.0);
+                        if (std::abs(moveLeft) <= maxNudge + 0.5)
+                            appendOffset(moveLeft, 0.0);
+                        if (std::abs(moveDown) <= maxNudge + 0.5)
+                            appendOffset(0.0, moveDown);
+                        if (std::abs(moveUp) <= maxNudge + 0.5)
+                            appendOffset(0.0, moveUp);
+                    }
                     for (const auto& [dx, dy] : offsets) {
                         appendCandidate(makeRect(clampedDesired.centerX() + dx - width * 0.5, clampedDesired.centerY() + dy - height * 0.5, width, height), scale);
                     }
