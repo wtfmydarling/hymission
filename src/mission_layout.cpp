@@ -574,8 +574,8 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     const double     sourceAspect = anchorMap.sourceHeight / std::max(1.0, anchorMap.sourceWidth);
     const double     areaAspect = area.height / std::max(1.0, area.width);
     const double     flatness = std::clamp((areaAspect * 0.70 - sourceAspect) / std::max(0.001, areaAspect * 0.35), 0.0, 1.0);
-    const double     countBlend = std::clamp((static_cast<double>(prepared.size()) - 5.0) / 8.0, 0.0, 1.0);
-    const double     bandBlend = flatness * countBlend * 0.46;
+    const double     countBlend = std::clamp((static_cast<double>(prepared.size()) - 5.0) / 3.0, 0.0, 1.0);
+    const double     bandBlend = flatness * countBlend * lerp(0.82, 0.92, density);
     const auto       overlapOffsets = buildNaturalOverlapOffsets(prepared, area);
     const auto       bandAnchors = buildNaturalBandAnchors(prepared, area);
     const double     areaCenterX = area.centerX();

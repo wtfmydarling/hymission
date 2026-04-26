@@ -320,6 +320,21 @@ std::vector<Scene> scenes() {
                     {.index = 7, .natural = {420, 720, 560, 320}, .label = "terminal"},
                 },
         },
+        {
+            .name = "live-flat-workspaces",
+            .area = {0, 0, 2880, 1800},
+            .windows =
+                {
+                    {.index = 0, .natural = {576, 60, 852, 540}, .label = "calendar ws2"},
+                    {.index = 1, .natural = {-977, 60, 1193, 828}, .label = "ghostty ws2"},
+                    {.index = 2, .natural = {1442, 60, 1188, 828}, .label = "chrome ws2"},
+                    {.index = 3, .natural = {12, 60, 1198, 828}, .label = "ghostty ws1"},
+                    {.index = 4, .natural = {12, 60, 1416, 828}, .label = "ghostty ws3"},
+                    {.index = 5, .natural = {1224, 60, 1193, 828}, .label = "qq ws1"},
+                    {.index = 6, .natural = {2431, 60, 1193, 828}, .label = "wechat ws1"},
+                    {.index = 7, .natural = {230, 60, 1198, 828}, .label = "dolphin ws2"},
+                },
+        },
     };
 }
 
