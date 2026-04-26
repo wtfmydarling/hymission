@@ -965,6 +965,15 @@ Rect stateSnapshotGlobalRectForWindow(const PHLWINDOW& window, bool goal = false
     return makeRect(position.x, position.y, size.x, size.y);
 }
 
+Rect layoutAnchorGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
+    if (!window)
+        return {};
+
+    const Vector2D position = renderedWindowPosition(window, goal);
+    const Vector2D size = goal ? window->m_realSize->goal() : window->m_realSize->value();
+    return makeRect(position.x, position.y, size.x, size.y);
+}
+
 Rect sceneGlobalRectForWindow(const PHLWINDOW& window, bool goal = false) {
     if (!window)
         return {};
@@ -9041,16 +9050,17 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         const bool useGoalGeometry = shouldUseGoalGeometryForStateSnapshot(window);
         const Rect naturalGlobal = stateSnapshotGlobalRectForWindow(window, useGoalGeometry);
+        const Rect layoutGlobal = layoutAnchorGlobalRectForWindow(window, useGoalGeometry);
         const std::size_t windowIndex = state.windows.size();
 
         inputsByMonitor[targetMonitor->m_id].push_back({
             .index = windowIndex,
             .natural =
                 {
-                    naturalGlobal.x - targetMonitor->m_position.x,
-                    naturalGlobal.y - targetMonitor->m_position.y,
-                    naturalGlobal.width,
-                    naturalGlobal.height,
+                    layoutGlobal.x - targetMonitor->m_position.x,
+                    layoutGlobal.y - targetMonitor->m_position.y,
+                    layoutGlobal.width,
+                    layoutGlobal.height,
                 },
             .label = window->m_title,
             .rowGroup = rowGroupForWindow(window),
