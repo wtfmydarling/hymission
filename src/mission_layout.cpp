@@ -1,6 +1,7 @@
 #include "mission_layout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -66,6 +67,10 @@ struct NaturalBandAnchor {
     bool   active = false;
     double x = 0.0;
     double y = 0.0;
+};
+
+struct NaturalProfile {
+    double visualBias = 0.0;
 };
 
 void clampRectToArea(Rect& rect, const Rect& area);
@@ -487,10 +492,11 @@ std::vector<NaturalOverlapOffset> buildNaturalOverlapOffsets(const std::vector<P
     return offsets;
 }
 
-std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<PreparedWindow>& prepared, const Rect& area) {
+std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<PreparedWindow>& prepared, const Rect& area, const NaturalProfile& profile) {
     std::vector<NaturalBandAnchor> anchors(prepared.size());
     const std::size_t              count = prepared.size();
-    if (count < 7)
+    const double                   visualBias = std::clamp(profile.visualBias, 0.0, 1.0);
+    if (count < (visualBias > 0.001 ? 4 : 7))
         return anchors;
 
     const double aspect = area.width / std::max(1.0, area.height);
@@ -511,8 +517,12 @@ std::vector<NaturalBandAnchor> buildNaturalBandAnchors(const std::vector<Prepare
         return prepared[a].input.natural.centerX() < prepared[b].input.natural.centerX();
     });
 
-    const double usedWidth = area.width * 0.76;
-    const double usedHeight = area.height * std::clamp(0.58 + static_cast<double>(count) * 0.006, 0.58, 0.74);
+    const double legacyUsedWidth = 0.76;
+    const double visualUsedWidth = std::clamp(0.74 + static_cast<double>(count) * 0.004, 0.76, 0.84);
+    const double legacyUsedHeight = std::clamp(0.58 + static_cast<double>(count) * 0.006, 0.58, 0.74);
+    const double visualUsedHeight = std::clamp(0.50 + static_cast<double>(count) * 0.014, 0.56, 0.76);
+    const double usedWidth = area.width * lerp(legacyUsedWidth, visualUsedWidth, visualBias);
+    const double usedHeight = area.height * lerp(legacyUsedHeight, visualUsedHeight, visualBias);
     const double left = area.centerX() - usedWidth / 2.0;
     const double top = area.centerY() - usedHeight / 2.0;
 
@@ -564,20 +574,31 @@ double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& con
     return worst;
 }
 
-std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& prepared, const Rect& area, double baseScale, const LayoutConfig& config) {
+std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& prepared,
+                                           const Rect&                        area,
+                                           double                             baseScale,
+                                           const LayoutConfig&                config,
+                                           const NaturalProfile&              profile) {
     std::vector<NaturalItem> items;
     items.reserve(prepared.size());
 
+    const double     visualBias = std::clamp(profile.visualBias, 0.0, 1.0);
     const double     density = std::clamp((static_cast<double>(prepared.size()) - 6.0) / 24.0, 0.0, 1.0);
-    const double     anchorSpread = lerp(0.62, 0.72, density);
+    const double     sourceAnchorSpread = lerp(0.62, 0.72, density);
+    const double     visualAnchorSpread = lerp(0.34, 0.46, density);
+    const double     anchorSpread = lerp(sourceAnchorSpread, visualAnchorSpread, visualBias);
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
     const double     sourceAspect = anchorMap.sourceHeight / std::max(1.0, anchorMap.sourceWidth);
     const double     areaAspect = area.height / std::max(1.0, area.width);
     const double     flatness = std::clamp((areaAspect * 0.70 - sourceAspect) / std::max(0.001, areaAspect * 0.35), 0.0, 1.0);
-    const double     countBlend = std::clamp((static_cast<double>(prepared.size()) - 5.0) / 3.0, 0.0, 1.0);
-    const double     bandBlend = flatness * countBlend * lerp(0.82, 0.92, density);
+    const double     sourceCountBlend = std::clamp((static_cast<double>(prepared.size()) - 5.0) / 3.0, 0.0, 1.0);
+    const double     sourceBandBlend = flatness * sourceCountBlend * lerp(0.82, 0.92, density);
+    const double     visualCountBlend = std::clamp((static_cast<double>(prepared.size()) - 3.0) / 5.0, 0.0, 1.0);
+    const double     visualUniformBlend = visualCountBlend * lerp(0.46, 0.62, density);
+    const double     visualFlatBlend = flatness * visualCountBlend * lerp(0.36, 0.44, density);
+    const double     bandBlend = std::clamp(lerp(sourceBandBlend, visualUniformBlend + visualFlatBlend, visualBias), 0.0, 0.94);
     const auto       overlapOffsets = buildNaturalOverlapOffsets(prepared, area);
-    const auto       bandAnchors = buildNaturalBandAnchors(prepared, area);
+    const auto       bandAnchors = buildNaturalBandAnchors(prepared, area, profile);
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
 
@@ -810,7 +831,108 @@ std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, 
     return slots;
 }
 
-std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area) {
+    if (slots.empty())
+        return std::numeric_limits<double>::infinity();
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    double totalArea = 0.0;
+    double weightedX = 0.0;
+    double weightedY = 0.0;
+    double averageScale = 0.0;
+
+    for (const auto& slot : slots) {
+        minX = std::min(minX, slot.target.x);
+        minY = std::min(minY, slot.target.y);
+        maxX = std::max(maxX, slot.target.x + slot.target.width);
+        maxY = std::max(maxY, slot.target.y + slot.target.height);
+
+        const double targetArea = slot.target.width * slot.target.height;
+        totalArea += targetArea;
+        weightedX += slot.target.centerX() * targetArea;
+        weightedY += slot.target.centerY() * targetArea;
+        averageScale += slot.scale;
+    }
+
+    averageScale /= static_cast<double>(slots.size());
+
+    const double areaPixels = std::max(1.0, area.width * area.height);
+    const double targetAreaRatio = totalArea / areaPixels;
+    const double centroidX = totalArea > 0.0 ? weightedX / totalArea : area.centerX();
+    const double centroidY = totalArea > 0.0 ? weightedY / totalArea : area.centerY();
+    const double gravityOffset = std::hypot(centroidX - area.centerX(), centroidY - area.centerY()) / std::max(1.0, std::hypot(area.width, area.height));
+
+    const double edgeLeft = minX - area.x;
+    const double edgeRight = area.x + area.width - maxX;
+    const double edgeTop = minY - area.y;
+    const double edgeBottom = area.y + area.height - maxY;
+    const double edgeBalance = std::abs(edgeLeft - edgeRight) / std::max(1.0, area.width) + std::abs(edgeTop - edgeBottom) / std::max(1.0, area.height);
+
+    constexpr int columns = 4;
+    constexpr int rows = 3;
+    const double  cellWidth = area.width / static_cast<double>(columns);
+    const double  cellHeight = area.height / static_cast<double>(rows);
+    const double  cellArea = std::max(1.0, cellWidth * cellHeight);
+    std::array<double, columns * rows> heat{};
+
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            const Rect cell{
+                area.x + static_cast<double>(column) * cellWidth,
+                area.y + static_cast<double>(row) * cellHeight,
+                cellWidth,
+                cellHeight,
+            };
+
+            double covered = 0.0;
+            for (const auto& slot : slots) {
+                const double width = std::min(slot.target.x + slot.target.width, cell.x + cell.width) - std::max(slot.target.x, cell.x);
+                const double height = std::min(slot.target.y + slot.target.height, cell.y + cell.height) - std::max(slot.target.y, cell.y);
+                covered += std::max(0.0, width) * std::max(0.0, height);
+            }
+            heat[static_cast<std::size_t>(row * columns + column)] = covered / cellArea;
+        }
+    }
+
+    double meanHeat = 0.0;
+    double leftHeat = 0.0;
+    double rightHeat = 0.0;
+    double topHeat = 0.0;
+    double bottomHeat = 0.0;
+    for (std::size_t i = 0; i < heat.size(); ++i) {
+        meanHeat += heat[i];
+        const int row = static_cast<int>(i / columns);
+        const int column = static_cast<int>(i % columns);
+        if (column < columns / 2)
+            leftHeat += heat[i];
+        else
+            rightHeat += heat[i];
+        if (row == 0)
+            topHeat += heat[i];
+        if (row == rows - 1)
+            bottomHeat += heat[i];
+    }
+    meanHeat /= static_cast<double>(heat.size());
+
+    double heatStdDev = 0.0;
+    for (const auto value : heat)
+        heatStdDev += (value - meanHeat) * (value - meanHeat);
+    heatStdDev = std::sqrt(heatStdDev / static_cast<double>(heat.size()));
+
+    const double heatImbalance = std::abs(leftHeat - rightHeat) + std::abs(topHeat - bottomHeat);
+    const double sparsePenalty = targetAreaRatio < 0.18 ? (0.18 - targetAreaRatio) : 0.0;
+
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + sparsePenalty * 2.0 - targetAreaRatio * 0.55 -
+        averageScale * 0.16;
+}
+
+std::optional<std::vector<WindowSlot>> computeNaturalLayoutWithProfile(const std::vector<PreparedWindow>& prepared,
+                                                                        const Rect&                        area,
+                                                                        const LayoutConfig&                config,
+                                                                        const NaturalProfile&              profile) {
     if (prepared.empty())
         return std::vector<WindowSlot>{};
 
@@ -827,7 +949,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
 
     for (int step = 0; step < 24; ++step) {
         const double baseScale = (lo + hi) / 2.0;
-        auto         items = buildNaturalItems(prepared, area, baseScale, config);
+        auto         items = buildNaturalItems(prepared, area, baseScale, config, profile);
         if (solveNaturalItems(items, area, config)) {
             lo = baseScale;
             best = std::move(items);
@@ -837,7 +959,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
     }
 
     if (!best && normalizedMinSlotScale(config) <= 0.0) {
-        auto items = buildNaturalItems(prepared, area, 0.0, config);
+        auto items = buildNaturalItems(prepared, area, 0.0, config, profile);
         if (solveNaturalItems(items, area, config))
             best = std::move(items);
     }
@@ -846,6 +968,34 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
         return std::nullopt;
 
     return materializeNaturalSlots(std::move(*best), area);
+}
+
+std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<PreparedWindow>& prepared, const Rect& area, const LayoutConfig& config) {
+    if (prepared.empty())
+        return std::vector<WindowSlot>{};
+
+    const std::array<NaturalProfile, 3> profiles{{
+        {.visualBias = 0.0},
+        {.visualBias = 0.55},
+        {.visualBias = 1.0},
+    }};
+
+    std::optional<std::vector<WindowSlot>> bestSlots;
+    double                                 bestCost = std::numeric_limits<double>::infinity();
+
+    for (const auto& profile : profiles) {
+        auto candidate = computeNaturalLayoutWithProfile(prepared, area, config, profile);
+        if (!candidate)
+            continue;
+
+        const double cost = naturalVisualCost(*candidate, area);
+        if (!bestSlots || cost < bestCost) {
+            bestCost = cost;
+            bestSlots = std::move(candidate);
+        }
+    }
+
+    return bestSlots;
 }
 
 std::vector<WindowSlot> computeGridLayout(const std::vector<PreparedWindow>& prepared, const Rect& inner, const LayoutConfig& config) {
