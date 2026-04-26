@@ -52,6 +52,11 @@ struct LayoutMetrics {
     double targetCentroidX = 0.0;
     double targetCentroidY = 0.0;
     double gravityOffset = 0.0;
+    double edgeMarginLeft = std::numeric_limits<double>::infinity();
+    double edgeMarginRight = std::numeric_limits<double>::infinity();
+    double edgeMarginTop = std::numeric_limits<double>::infinity();
+    double edgeMarginBottom = std::numeric_limits<double>::infinity();
+    double minEdgeMargin = 0.0;
     double averageMotion = 0.0;
     double maxMotion = 0.0;
     double heatMax = 0.0;
@@ -72,6 +77,7 @@ struct StressResult {
 struct MetricSeries {
     std::vector<double> values;
     double              sum = 0.0;
+    double              min = std::numeric_limits<double>::infinity();
     double              max = 0.0;
 };
 
@@ -82,6 +88,11 @@ struct StressSummary {
     std::size_t unreadableShortEdgeCases = 0;
     MetricSeries score;
     MetricSeries gravityOffset;
+    MetricSeries edgeMarginLeft;
+    MetricSeries edgeMarginRight;
+    MetricSeries edgeMarginTop;
+    MetricSeries edgeMarginBottom;
+    MetricSeries minEdgeMargin;
     MetricSeries heatMax;
     MetricSeries heatStdDev;
     MetricSeries heatImbalance;
@@ -492,6 +503,10 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         totalTargetArea += slotArea;
         weightedX += slots[i].target.centerX() * slotArea;
         weightedY += slots[i].target.centerY() * slotArea;
+        metrics.edgeMarginLeft = std::min(metrics.edgeMarginLeft, slots[i].target.x - area.x);
+        metrics.edgeMarginRight = std::min(metrics.edgeMarginRight, area.x + area.width - (slots[i].target.x + slots[i].target.width));
+        metrics.edgeMarginTop = std::min(metrics.edgeMarginTop, slots[i].target.y - area.y);
+        metrics.edgeMarginBottom = std::min(metrics.edgeMarginBottom, area.y + area.height - (slots[i].target.y + slots[i].target.height));
         metrics.outOfBoundsArea += outsideArea(slots[i].target, area);
         if (window) {
             const double motion = centerDistance(window->natural, slots[i].target) / diagonal;
@@ -521,9 +536,15 @@ LayoutMetrics measureLayout(const std::vector<WindowSlot>& slots, const Rect& ar
         metrics.averageScale /= static_cast<double>(slots.size());
         metrics.averageShortEdge /= static_cast<double>(slots.size());
         metrics.averageMotion /= static_cast<double>(slots.size());
+        metrics.minEdgeMargin = std::min({metrics.edgeMarginLeft, metrics.edgeMarginRight, metrics.edgeMarginTop, metrics.edgeMarginBottom});
     } else {
         metrics.minScale = 0.0;
         metrics.minShortEdge = 0.0;
+        metrics.edgeMarginLeft = 0.0;
+        metrics.edgeMarginRight = 0.0;
+        metrics.edgeMarginTop = 0.0;
+        metrics.edgeMarginBottom = 0.0;
+        metrics.minEdgeMargin = 0.0;
     }
 
     const double areaPixels = std::max(1.0, area.width * area.height);
@@ -706,6 +727,7 @@ Scene randomStressScene(std::mt19937& rng, std::size_t caseIndex) {
 void recordMetric(MetricSeries& series, double value) {
     series.values.push_back(value);
     series.sum += value;
+    series.min = std::min(series.min, value);
     series.max = std::max(series.max, value);
 }
 
@@ -741,6 +763,11 @@ void recordStressMetrics(StressSummary& summary, const LayoutMetrics& metrics) {
 
     recordMetric(summary.score, metrics.score);
     recordMetric(summary.gravityOffset, metrics.gravityOffset);
+    recordMetric(summary.edgeMarginLeft, metrics.edgeMarginLeft);
+    recordMetric(summary.edgeMarginRight, metrics.edgeMarginRight);
+    recordMetric(summary.edgeMarginTop, metrics.edgeMarginTop);
+    recordMetric(summary.edgeMarginBottom, metrics.edgeMarginBottom);
+    recordMetric(summary.minEdgeMargin, metrics.minEdgeMargin);
     recordMetric(summary.heatMax, metrics.heatMax);
     recordMetric(summary.heatStdDev, metrics.heatStdDev);
     recordMetric(summary.heatImbalance, metrics.heatImbalance);
@@ -778,7 +805,10 @@ StressReport runStress(const Options& options) {
 
 void printMetricSeries(std::string_view name, const MetricSeries& series) {
     std::cout << "summary " << name
-              << " avg=" << std::fixed << std::setprecision(4) << metricAverage(series)
+              << " min=" << std::fixed << std::setprecision(4) << (series.values.empty() ? 0.0 : series.min)
+              << " p01=" << metricPercentile(series, 0.01)
+              << " p05=" << metricPercentile(series, 0.05)
+              << " avg=" << metricAverage(series)
               << " p50=" << metricPercentile(series, 0.50)
               << " p95=" << metricPercentile(series, 0.95)
               << " p99=" << metricPercentile(series, 0.99)
@@ -794,6 +824,11 @@ void printStressSummary(const StressSummary& summary) {
               << '\n';
     printMetricSeries("score", summary.score);
     printMetricSeries("gravityOffset", summary.gravityOffset);
+    printMetricSeries("edgeMarginLeft", summary.edgeMarginLeft);
+    printMetricSeries("edgeMarginRight", summary.edgeMarginRight);
+    printMetricSeries("edgeMarginTop", summary.edgeMarginTop);
+    printMetricSeries("edgeMarginBottom", summary.edgeMarginBottom);
+    printMetricSeries("minEdgeMargin", summary.minEdgeMargin);
     printMetricSeries("heatMax", summary.heatMax);
     printMetricSeries("heatStdDev", summary.heatStdDev);
     printMetricSeries("heatImbalance", summary.heatImbalance);
@@ -911,6 +946,7 @@ void writeSvg(const std::string& path, const Scene& scene, const LayoutConfig& c
         << "\" font-family=\"monospace\" font-size=\"14\" fill=\"#334155\">gravity=" << std::setprecision(3) << metrics.gravityOffset
         << " heatMax=" << metrics.heatMax << " heatStdDev=" << metrics.heatStdDev << " heatImbalance=" << metrics.heatImbalance
         << " short(min/avg)=" << std::setprecision(1) << metrics.minShortEdge << "/" << metrics.averageShortEdge
+        << " edge(l/r/t/b)=" << metrics.edgeMarginLeft << "/" << metrics.edgeMarginRight << "/" << metrics.edgeMarginTop << "/" << metrics.edgeMarginBottom
         << " motion(avg/max)=" << metrics.averageMotion << "/" << metrics.maxMotion << " inv(x/y)=" << metrics.xInversions << "/" << metrics.yInversions
         << "</text>\n";
     out << "</svg>\n";
@@ -937,6 +973,8 @@ void printMetrics(const LayoutMetrics& metrics) {
               << " averageScale=" << metrics.averageScale
               << " minShortEdge=" << std::setprecision(1) << metrics.minShortEdge
               << " averageShortEdge=" << metrics.averageShortEdge
+              << " edgeMargins(l/r/t/b)=" << metrics.edgeMarginLeft << "/" << metrics.edgeMarginRight << "/" << metrics.edgeMarginTop << "/" << metrics.edgeMarginBottom
+              << " minEdgeMargin=" << metrics.minEdgeMargin
               << " targetAreaRatio=" << metrics.targetAreaRatio
               << " gravityOffset=" << metrics.gravityOffset
               << " centroid=" << static_cast<int>(metrics.targetCentroidX) << "," << static_cast<int>(metrics.targetCentroidY)
