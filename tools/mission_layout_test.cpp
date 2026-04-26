@@ -179,6 +179,34 @@ int main() {
     {
         LayoutConfig config = deterministicConfig();
         config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 32.0;
+        config.columnSpacing = 32.0;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {320, 780, 520, 360}, .label = "lower-left"},
+            {.index = 1, .natural = {870, 790, 440, 330}, .label = "lower-right"},
+            {.index = 2, .natural = {420, 1180, 500, 300}, .label = "bottom-left"},
+            {.index = 3, .natural = {980, 1160, 410, 320}, .label = "bottom-right"},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 1400, 900}, config);
+        ok &= expect(slots.size() == 4, "natural engine should keep off-center source windows");
+
+        double centerY = 0.0;
+        for (const auto& slot : slots)
+            centerY += slot.target.centerY();
+        centerY /= static_cast<double>(slots.size());
+
+        ok &= expect(centerY > 330.0 && centerY < 570.0, "natural engine should recenter an off-screen-biased window cloud");
+        ok &= expect(slots[0].target.centerX() < slots[1].target.centerX() && slots[2].target.centerX() < slots[3].target.centerX(),
+                     "recentered natural engine should preserve left/right spatial memory");
+        ok &= expect(slots[0].target.centerY() < slots[2].target.centerY() && slots[1].target.centerY() < slots[3].target.centerY(),
+                     "recentered natural engine should preserve top/bottom spatial memory");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
         config.forceRowGroups = true;
 
         LayoutConfig gridConfig = config;

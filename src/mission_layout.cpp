@@ -47,6 +47,12 @@ struct NaturalItem {
     double         scale = 1.0;
 };
 
+struct NaturalAnchorMap {
+    double sourceCenterX = 0.0;
+    double sourceCenterY = 0.0;
+    double scale = 1.0;
+};
+
 double clampPositive(double value) {
     return std::max(0.0, value);
 }
@@ -322,6 +328,36 @@ double overlapAlong(double minA, double maxA, double minB, double maxB, double s
     return std::min(maxA, maxB) - std::max(minA, minB) + spacing;
 }
 
+NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepared, const Rect& area) {
+    if (prepared.empty())
+        return {.sourceCenterX = area.centerX(), .sourceCenterY = area.centerY(), .scale = 1.0};
+
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+
+    for (const auto& window : prepared) {
+        const Rect& natural = window.input.natural;
+        minX = std::min(minX, natural.x);
+        minY = std::min(minY, natural.y);
+        maxX = std::max(maxX, natural.x + natural.width);
+        maxY = std::max(maxY, natural.y + natural.height);
+    }
+
+    const double sourceWidth = std::max(1.0, maxX - minX);
+    const double sourceHeight = std::max(1.0, maxY - minY);
+    const double minSpreadWidth = std::max(sourceWidth, area.width * 0.35);
+    const double minSpreadHeight = std::max(sourceHeight, area.height * 0.35);
+    const double fitScale = std::min(area.width / minSpreadWidth, area.height / minSpreadHeight);
+
+    return {
+        .sourceCenterX = (minX + maxX) / 2.0,
+        .sourceCenterY = (minY + maxY) / 2.0,
+        .scale = std::min(1.0, fitScale),
+    };
+}
+
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
     const double gapX = std::max(0.0, config.columnSpacing * 0.25);
     const double gapY = std::max(0.0, config.rowSpacing * 0.25);
@@ -346,6 +382,7 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     items.reserve(prepared.size());
 
     constexpr double anchorSpread = 0.78;
+    const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
 
@@ -356,8 +393,8 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
         const double previewWidth = std::max(0.0, window.input.natural.width * scale);
         const double previewHeight = std::max(0.0, window.input.natural.height * scale);
 
-        double anchorX = areaCenterX + (window.input.natural.centerX() - areaCenterX) * anchorSpread;
-        double anchorY = areaCenterY + (window.input.natural.centerY() - areaCenterY) * anchorSpread;
+        double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
+        double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
         anchorX = std::clamp(anchorX, area.x + cellWidth / 2.0, area.x + area.width - cellWidth / 2.0);
         anchorY = std::clamp(anchorY, area.y + cellHeight / 2.0, area.y + area.height - cellHeight / 2.0);
 
