@@ -9739,8 +9739,9 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
 
         const bool horizontal = scrolling->m_scrollingData->controller->isPrimaryHorizontal();
         const double crossScale = horizontal ? previewArea.height / workAreaBox.height : previewArea.width / workAreaBox.width;
+        const double mainFitScale = horizontal ? previewArea.width / workAreaBox.width : previewArea.height / workAreaBox.height;
         const double maxScale = std::max(config.minSlotScale, config.maxPreviewScale);
-        const double scale = std::max(config.minSlotScale, std::min(crossScale, maxScale));
+        const double scale = std::max(config.minSlotScale, std::min({crossScale, mainFitScale, maxScale}));
         const double scaledViewportWidth = workAreaBox.width * scale;
         const double scaledViewportHeight = workAreaBox.height * scale;
         const double viewportX = previewArea.x + (previewArea.width - scaledViewportWidth) * 0.5;
