@@ -362,9 +362,9 @@ NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepar
     };
 }
 
-std::vector<std::size_t> buildNaturalOverlapRanks(const std::vector<PreparedWindow>& prepared) {
-    std::vector<std::size_t> ranks(prepared.size(), 0);
-    std::size_t              nextRank = 0;
+std::vector<int> buildNaturalOverlapRanks(const std::vector<PreparedWindow>& prepared) {
+    std::vector<int> ranks(prepared.size(), -1);
+    int              nextRank = 0;
 
     for (std::size_t i = 0; i < prepared.size(); ++i) {
         bool overlapsPeer = false;
@@ -382,6 +382,22 @@ std::vector<std::size_t> buildNaturalOverlapRanks(const std::vector<PreparedWind
     }
 
     return ranks;
+}
+
+std::pair<double, double> naturalOverlapOffset(int rank, int count, const Rect& area) {
+    if (rank < 0 || count <= 1)
+        return {0.0, 0.0};
+
+    const int    columns = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+    const int    rows = static_cast<int>(std::ceil(static_cast<double>(count) / static_cast<double>(columns)));
+    const int    row = rank / columns;
+    const int    column = rank % columns;
+    const double stepX = area.width * 0.16;
+    const double stepY = area.height * 0.14;
+    return {
+        (static_cast<double>(column) - static_cast<double>(columns - 1) / 2.0) * stepX,
+        (static_cast<double>(row) - static_cast<double>(rows - 1) / 2.0) * stepY,
+    };
 }
 
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
@@ -408,12 +424,15 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     items.reserve(prepared.size());
 
     constexpr double anchorSpread = 0.78;
-    constexpr double goldenAngle = 2.39996322972865332;
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
     const auto       overlapRanks = buildNaturalOverlapRanks(prepared);
+    int              overlapCount = 0;
+    for (const auto rank : overlapRanks) {
+        if (rank >= 0)
+            overlapCount = std::max(overlapCount, rank + 1);
+    }
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
-    const double     collisionJitterBase = std::min(area.width, area.height) * 0.18;
 
     for (std::size_t order = 0; order < prepared.size(); ++order) {
         const auto&  window = prepared[order];
@@ -425,14 +444,10 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
-        if (overlapRanks[order] > 0 || std::any_of(prepared.begin(), prepared.end(), [&](const PreparedWindow& other) {
-                return &other != &window && rectsOverlap(window.input.natural, other.input.natural);
-            })) {
-            const double rank = static_cast<double>(overlapRanks[order]);
-            const double angle = rank * goldenAngle;
-            const double radius = collisionJitterBase * std::sqrt((rank + 1.0) / std::max(1.0, static_cast<double>(prepared.size())));
-            anchorX += std::cos(angle) * radius;
-            anchorY += std::sin(angle) * radius;
+        if (overlapRanks[order] >= 0) {
+            const auto [offsetX, offsetY] = naturalOverlapOffset(overlapRanks[order], overlapCount, area);
+            anchorX += offsetX;
+            anchorY += offsetY;
         }
         anchorX = std::clamp(anchorX, area.x + cellWidth / 2.0, area.x + area.width - cellWidth / 2.0);
         anchorY = std::clamp(anchorY, area.y + cellHeight / 2.0, area.y + area.height - cellHeight / 2.0);
