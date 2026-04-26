@@ -3063,10 +3063,6 @@ bool OverviewController::scrollActiveLayoutByGestureDelta(const IPointer::SSwipe
     if (std::abs(offsetAfter - offsetBefore) >= 0.001) {
         controller->setOffset(offsetAfter);
         data->recalculate(true);
-        if (workspace) {
-            if (const auto monitor = workspace->m_monitor.lock())
-                g_layoutManager->recalculateMonitor(monitor);
-        }
         if (g_pAnimationManager)
             g_pAnimationManager->frameTick();
     }
@@ -3974,9 +3970,7 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
     if (!isScrollingWorkspace(activeLayoutWorkspace()))
         return reject("active-workspace-not-scrolling");
 
-    const bool inputFollowMouseWasOverridden = m_inputFollowMouseOverridden;
     const bool scrollingFollowFocusWasOverridden = m_scrollingFollowFocusOverridden;
-    setInputFollowMouseOverride(true);
     setScrollingFollowFocusOverride(true);
 
     m_scrollGestureSession = {
@@ -3986,14 +3980,12 @@ bool OverviewController::beginScrollGesture(HymissionScrollMode mode, eTrackpadG
         .direction = direction,
         .deltaScale = deltaScale,
         .skipNextUpdate = true,
-        .restoreInputFollowMouse = !inputFollowMouseWasOverridden && m_inputFollowMouseOverridden,
         .restoreScrollingFollowFocus = !scrollingFollowFocusWasOverridden && m_scrollingFollowFocusOverridden,
     };
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] scroll gesture accepted route=layout dir=" << trackpadDirectionName(direction) << " scale=" << deltaScale
-            << " suppressInputFollowMouse=" << (m_scrollGestureSession.restoreInputFollowMouse ? 1 : 0)
             << " suppressScrollingFollowFocus=" << (m_scrollGestureSession.restoreScrollingFollowFocus ? 1 : 0);
         debugLog(out.str());
     }
@@ -4029,13 +4021,11 @@ void OverviewController::endScrollGesture(bool cancelled) {
     if (!m_scrollGestureSession.active)
         return;
 
-    const bool restoreInputFollowMouse = m_scrollGestureSession.restoreInputFollowMouse;
     const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
-            << " restoreInputFollowMouse=" << (restoreInputFollowMouse ? 1 : 0)
             << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0);
         debugLog(out.str());
     }
@@ -4044,8 +4034,6 @@ void OverviewController::endScrollGesture(bool cancelled) {
 
     if (deferScrollingFollowFocusRestore)
         m_restoreScrollingFollowFocusAfterScrollMouseMove = true;
-    if (restoreInputFollowMouse)
-        setInputFollowMouseOverride(false);
 }
 
 bool OverviewController::beginOverviewWorkspaceSwipeGesture(eTrackpadGestureDirection direction) {
