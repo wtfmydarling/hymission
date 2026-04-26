@@ -207,6 +207,33 @@ int main() {
     {
         LayoutConfig config = deterministicConfig();
         config.engine = LayoutEngine::Natural;
+        config.rowSpacing = 32.0;
+        config.columnSpacing = 32.0;
+
+        const std::vector<WindowInput> windows = {
+            {.index = 0, .natural = {80, 80, 1200, 700}, .label = "stacked-a"},
+            {.index = 1, .natural = {90, 90, 1200, 700}, .label = "stacked-b"},
+            {.index = 2, .natural = {100, 100, 1200, 700}, .label = "stacked-c"},
+            {.index = 3, .natural = {110, 110, 1200, 700}, .label = "stacked-d"},
+        };
+
+        const auto slots = engine.compute(windows, {0, 0, 1400, 900}, config);
+        ok &= expect(slots.size() == 4, "natural engine should keep heavily overlapping windows");
+
+        double averageScale = 0.0;
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            averageScale += slots[i].scale;
+            for (std::size_t j = i + 1; j < slots.size(); ++j)
+                ok &= expect(!rectsOverlap(slots[i].target, slots[j].target), "overlap jitter should still produce non-overlapping previews");
+        }
+        averageScale /= static_cast<double>(slots.size());
+
+        ok &= expect(averageScale > 0.22, "overlap jitter should avoid collapsing heavily stacked windows into tiny previews");
+    }
+
+    {
+        LayoutConfig config = deterministicConfig();
+        config.engine = LayoutEngine::Natural;
         config.forceRowGroups = true;
 
         LayoutConfig gridConfig = config;

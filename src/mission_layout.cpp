@@ -328,6 +328,10 @@ double overlapAlong(double minA, double maxA, double minB, double maxB, double s
     return std::min(maxA, maxB) - std::max(minA, minB) + spacing;
 }
 
+bool rectsOverlap(const Rect& lhs, const Rect& rhs) {
+    return lhs.x < rhs.x + rhs.width && lhs.x + lhs.width > rhs.x && lhs.y < rhs.y + rhs.height && lhs.y + lhs.height > rhs.y;
+}
+
 NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepared, const Rect& area) {
     if (prepared.empty())
         return {.sourceCenterX = area.centerX(), .sourceCenterY = area.centerY(), .scale = 1.0};
@@ -358,6 +362,28 @@ NaturalAnchorMap buildNaturalAnchorMap(const std::vector<PreparedWindow>& prepar
     };
 }
 
+std::vector<std::size_t> buildNaturalOverlapRanks(const std::vector<PreparedWindow>& prepared) {
+    std::vector<std::size_t> ranks(prepared.size(), 0);
+    std::size_t              nextRank = 0;
+
+    for (std::size_t i = 0; i < prepared.size(); ++i) {
+        bool overlapsPeer = false;
+        for (std::size_t j = 0; j < prepared.size(); ++j) {
+            if (i == j)
+                continue;
+            if (rectsOverlap(prepared[i].input.natural, prepared[j].input.natural)) {
+                overlapsPeer = true;
+                break;
+            }
+        }
+
+        if (overlapsPeer)
+            ranks[i] = nextRank++;
+    }
+
+    return ranks;
+}
+
 double maxOverlap(const std::vector<NaturalItem>& items, const LayoutConfig& config) {
     const double gapX = std::max(0.0, config.columnSpacing * 0.25);
     const double gapY = std::max(0.0, config.rowSpacing * 0.25);
@@ -382,11 +408,15 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
     items.reserve(prepared.size());
 
     constexpr double anchorSpread = 0.78;
+    constexpr double goldenAngle = 2.39996322972865332;
     const auto       anchorMap = buildNaturalAnchorMap(prepared, area);
+    const auto       overlapRanks = buildNaturalOverlapRanks(prepared);
     const double     areaCenterX = area.centerX();
     const double     areaCenterY = area.centerY();
+    const double     collisionJitterBase = std::min(area.width, area.height) * 0.18;
 
-    for (const auto& window : prepared) {
+    for (std::size_t order = 0; order < prepared.size(); ++order) {
+        const auto&  window = prepared[order];
         const double scale = std::clamp(baseScale * window.weightScale, 0.0, normalizedMaxPreviewScale(config));
         const double cellWidth = std::max(1.0, window.layoutWidth * scale);
         const double cellHeight = std::max(1.0, window.layoutHeight * scale);
@@ -395,6 +425,15 @@ std::vector<NaturalItem> buildNaturalItems(const std::vector<PreparedWindow>& pr
 
         double anchorX = areaCenterX + (window.input.natural.centerX() - anchorMap.sourceCenterX) * anchorSpread * anchorMap.scale;
         double anchorY = areaCenterY + (window.input.natural.centerY() - anchorMap.sourceCenterY) * anchorSpread * anchorMap.scale;
+        if (overlapRanks[order] > 0 || std::any_of(prepared.begin(), prepared.end(), [&](const PreparedWindow& other) {
+                return &other != &window && rectsOverlap(window.input.natural, other.input.natural);
+            })) {
+            const double rank = static_cast<double>(overlapRanks[order]);
+            const double angle = rank * goldenAngle;
+            const double radius = collisionJitterBase * std::sqrt((rank + 1.0) / std::max(1.0, static_cast<double>(prepared.size())));
+            anchorX += std::cos(angle) * radius;
+            anchorY += std::sin(angle) * radius;
+        }
         anchorX = std::clamp(anchorX, area.x + cellWidth / 2.0, area.x + area.width - cellWidth / 2.0);
         anchorY = std::clamp(anchorY, area.y + cellHeight / 2.0, area.y + area.height - cellHeight / 2.0);
 
@@ -483,7 +522,7 @@ bool solveNaturalItems(std::vector<NaturalItem>& items, const Rect& area, const 
         }
 
         for (auto& item : items) {
-            const double spring = iteration < 80 ? 0.025 : 0.010;
+            const double spring = iteration < 80 ? 0.010 : 0.004;
             const double dx = (item.anchorX - item.cell.centerX()) * spring;
             const double dy = (item.anchorY - item.cell.centerY()) * spring;
             item.cell.x += dx;
