@@ -647,6 +647,7 @@ class OverviewController {
     bool                      m_restoreInputFollowMouseAfterPostClose = false;
     bool                      m_scrollingFollowFocusOverridden = false;
     long                      m_scrollingFollowFocusBackup = 1;
+    bool                      m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
     bool                      m_animationsEnabledOverridden = false;
     long                      m_animationsEnabledBackup = 1;
     SP<CEventLoopTimer>       m_animationsEnabledRestoreTimer;

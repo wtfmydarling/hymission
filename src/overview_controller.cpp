@@ -1918,6 +1918,13 @@ void OverviewController::renderStage(eRenderStage stage) {
 }
 
 void OverviewController::handleMouseMove() {
+    if (m_restoreScrollingFollowFocusAfterScrollMouseMove && !m_scrollGestureSession.active) {
+        if (debugLogsEnabled())
+            debugLog("[hymission] restore scrolling:follow_focus after scroll mouse move");
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+        setScrollingFollowFocusOverride(false);
+    }
+
     if (m_postCloseForcedFocusLatched && !isVisible()) {
         if (m_ignorePostCloseMouseMoveCount > 0) {
             --m_ignorePostCloseMouseMoveCount;
@@ -4023,20 +4030,20 @@ void OverviewController::endScrollGesture(bool cancelled) {
         return;
 
     const bool restoreInputFollowMouse = m_scrollGestureSession.restoreInputFollowMouse;
-    const bool restoreScrollingFollowFocus = m_scrollGestureSession.restoreScrollingFollowFocus;
+    const bool deferScrollingFollowFocusRestore = m_scrollGestureSession.restoreScrollingFollowFocus;
 
     if (debugLogsEnabled()) {
         std::ostringstream out;
         out << "[hymission] scroll gesture end cancelled=" << (cancelled ? 1 : 0) << " samples=" << m_scrollGestureSession.debugSamples
             << " restoreInputFollowMouse=" << (restoreInputFollowMouse ? 1 : 0)
-            << " restoreScrollingFollowFocus=" << (restoreScrollingFollowFocus ? 1 : 0);
+            << " deferScrollingFollowFocusRestore=" << (deferScrollingFollowFocusRestore ? 1 : 0);
         debugLog(out.str());
     }
 
     m_scrollGestureSession = {};
 
-    if (restoreScrollingFollowFocus)
-        setScrollingFollowFocusOverride(false);
+    if (deferScrollingFollowFocusRestore)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = true;
     if (restoreInputFollowMouse)
         setInputFollowMouseOverride(false);
 }
@@ -4577,6 +4584,9 @@ void OverviewController::setInputFollowMouseOverride(bool disable) {
 }
 
 void OverviewController::setScrollingFollowFocusOverride(bool disable) {
+    if (!disable && m_restoreScrollingFollowFocusAfterScrollMouseMove)
+        m_restoreScrollingFollowFocusAfterScrollMouseMove = false;
+
     if (!hasScrollingWorkspace() && !isScrollingWorkspace(activeLayoutWorkspace()))
         return;
 
