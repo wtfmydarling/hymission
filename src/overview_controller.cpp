@@ -483,6 +483,39 @@ double maxCenteredScaleForPerSideGrowth(const Rect& rect, double maxGrowXPerSide
     return std::max(1.0, std::min(scaleX, scaleY));
 }
 
+struct EdgeMotionAffinity {
+    double verticalEdge = 0.0;
+    double horizontalEdge = 0.0;
+    double corner = 0.0;
+};
+
+EdgeMotionAffinity edgeMotionAffinityForRect(const Rect& rect, const Rect& bounds) {
+    if (bounds.width <= 1.0 || bounds.height <= 1.0)
+        return {};
+
+    const double centerX = rect.centerX();
+    const double centerY = rect.centerY();
+    const double leftDistance = std::max(0.0, centerX - bounds.x);
+    const double rightDistance = std::max(0.0, bounds.x + bounds.width - centerX);
+    const double topDistance = std::max(0.0, centerY - bounds.y);
+    const double bottomDistance = std::max(0.0, bounds.y + bounds.height - centerY);
+
+    EdgeMotionAffinity affinity;
+    affinity.verticalEdge = clampUnit(1.0 - std::min(leftDistance, rightDistance) / std::max(1.0, bounds.width * 0.24));
+    affinity.horizontalEdge = clampUnit(1.0 - std::min(topDistance, bottomDistance) / std::max(1.0, bounds.height * 0.24));
+    affinity.corner = affinity.verticalEdge * affinity.horizontalEdge;
+    return affinity;
+}
+
+double edgeAwareMotionDistance2(const Rect& source, const Rect& target, const Rect& bounds) {
+    const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(source, bounds);
+    const double             dx = target.centerX() - source.centerX();
+    const double             dy = target.centerY() - source.centerY();
+    const double             xWeight = 1.0 + affinity.verticalEdge * 7.0 + affinity.corner * 10.0;
+    const double             yWeight = 1.0 + affinity.horizontalEdge * 7.0 + affinity.corner * 10.0;
+    return dx * dx * xWeight + dy * dy * yWeight;
+}
+
 Rect inflateRect(const Rect& rect, double amountX, double amountY) {
     return makeRect(rect.x - amountX, rect.y - amountY, rect.width + amountX * 2.0, rect.height + amountY * 2.0);
 }
@@ -6928,8 +6961,6 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
         const auto& managed = m_state.windows[index];
         if (index == currentManagedIndex || managed.targetMonitor != currentManaged->targetMonitor)
             continue;
-        if (managed.isNiriFloatingOverlay != currentManaged->isNiriFloatingOverlay)
-            continue;
 
         const Rect base = baseTargets[index];
         const double distance = std::hypot(base.centerX() - pressureCenterX, base.centerY() - pressureCenterY);
@@ -7003,6 +7034,48 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             return target;
         };
 
+        const auto motionDirectionsForPeer = [&](const Rect& base, double radialX, double radialY) {
+            std::vector<std::pair<double, double>> directions;
+            directions.reserve(10);
+
+            const auto appendDirection = [&](double dx, double dy) {
+                const double length = std::hypot(dx, dy);
+                if (length <= 0.001)
+                    return;
+                dx /= length;
+                dy /= length;
+                const auto duplicate = std::ranges::any_of(directions, [&](const auto& existing) {
+                    return std::abs(existing.first - dx) <= 0.001 && std::abs(existing.second - dy) <= 0.001;
+                });
+                if (!duplicate)
+                    directions.push_back({dx, dy});
+            };
+
+            const EdgeMotionAffinity affinity = edgeMotionAffinityForRect(base, boundsGlobal);
+            const double             awayX = std::abs(radialX) > 0.001 ? radialX : (base.centerX() >= pressureCenterX ? 1.0 : -1.0);
+            const double             awayY = std::abs(radialY) > 0.001 ? radialY : (base.centerY() >= pressureCenterY ? 1.0 : -1.0);
+
+            if (affinity.verticalEdge > 0.15) {
+                appendDirection(0.0, awayY);
+                appendDirection(0.0, 1.0);
+                appendDirection(0.0, -1.0);
+            }
+            if (affinity.horizontalEdge > 0.15) {
+                appendDirection(awayX, 0.0);
+                appendDirection(1.0, 0.0);
+                appendDirection(-1.0, 0.0);
+            }
+
+            appendDirection(radialX, radialY);
+            appendDirection(radialX, 0.0);
+            appendDirection(0.0, radialY);
+            appendDirection(1.0, 0.0);
+            appendDirection(-1.0, 0.0);
+            appendDirection(0.0, 1.0);
+            appendDirection(0.0, -1.0);
+            return directions;
+        };
+
         for (const auto& peer : peers) {
             const double deltaX = peer.base.centerX() - pressureCenterX;
             const double deltaY = peer.base.centerY() - pressureCenterY;
@@ -7027,9 +7100,21 @@ void OverviewController::updateSelectedWindowLayout(const PHLWINDOW& previousSel
             Rect target = translateRect(peer.base, directionX * radialPressure * easedInfluence, directionY * radialPressure * easedInfluence);
             target = clampRectInside(target, boundsGlobal);
 
-            auto resolved = resolveAlongBearing(target, directionX, directionY);
-            if (!resolved)
-                resolved = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), directionX, directionY);
+            std::optional<Rect> resolved;
+            double              resolvedScore = std::numeric_limits<double>::max();
+            for (const auto& [candidateDirX, candidateDirY] : motionDirectionsForPeer(peer.base, directionX, directionY)) {
+                auto candidate = resolveAlongBearing(target, candidateDirX, candidateDirY);
+                if (!candidate)
+                    candidate = resolveAlongBearing(clampRectInside(peer.base, boundsGlobal), candidateDirX, candidateDirY);
+                if (!candidate)
+                    continue;
+
+                const double score = edgeAwareMotionDistance2(peer.base, *candidate, boundsGlobal);
+                if (!resolved || score < resolvedScore) {
+                    resolved = candidate;
+                    resolvedScore = score;
+                }
+            }
             if (!resolved)
                 return false;
 
@@ -10024,6 +10109,12 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 const Rect& rhsRect = state.windows[rhs].targetGlobal;
                 const double lhsArea = lhsRect.width * lhsRect.height;
                 const double rhsArea = rhsRect.width * rhsRect.height;
+                const auto   lhsAffinity = edgeMotionAffinityForRect(lhsRect, boundsGlobal);
+                const auto   rhsAffinity = edgeMotionAffinityForRect(rhsRect, boundsGlobal);
+                const double lhsAnchor = lhsAffinity.corner * 4.0 + std::max(lhsAffinity.verticalEdge, lhsAffinity.horizontalEdge) * 2.0;
+                const double rhsAnchor = rhsAffinity.corner * 4.0 + std::max(rhsAffinity.verticalEdge, rhsAffinity.horizontalEdge) * 2.0;
+                if (std::abs(lhsAnchor - rhsAnchor) > 0.01)
+                    return lhsAnchor > rhsAnchor;
                 if (std::abs(lhsArea - rhsArea) > 1.0)
                     return lhsArea > rhsArea;
                 return lhs < rhs;
@@ -10073,7 +10164,7 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 const double scaleFloorBySlot = currentSlotScale > 0.001 ? absoluteScaleFloor / currentSlotScale : 0.72;
                 const double scaleFloorByReadableSize =
                     config.minPreviewShortEdge / std::max(1.0, std::min(clampedDesired.width, clampedDesired.height));
-                const double scaleFloor = std::min(1.0, std::max({0.72, scaleFloorBySlot, scaleFloorByReadableSize}));
+                const double scaleFloor = std::min(1.0, std::max({0.52, scaleFloorBySlot, scaleFloorByReadableSize}));
 
                 std::vector<double> scales;
                 scales.push_back(1.0);
@@ -10102,13 +10193,37 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 for (const double scale : scales) {
                     const double width = clampedDesired.width * scale;
                     const double height = clampedDesired.height * scale;
+                    const Rect   scaledDesired =
+                        makeRect(clampedDesired.centerX() - width * 0.5, clampedDesired.centerY() - height * 0.5, width, height);
                     std::vector<std::pair<double, double>> offsets = baseOffsets;
                     const auto appendOffset = [&](double dx, double dy) {
                         offsets.push_back({dx, dy});
                     };
+                    std::vector<double> candidateXs;
+                    std::vector<double> candidateYs;
+                    candidateXs.reserve(obstacles.size() * 3 + 4);
+                    candidateYs.reserve(obstacles.size() * 3 + 4);
+                    const auto appendX = [&](double x) {
+                        if (!std::ranges::any_of(candidateXs, [&](double existing) { return std::abs(existing - x) <= 0.5; }))
+                            candidateXs.push_back(x);
+                    };
+                    const auto appendY = [&](double y) {
+                        if (!std::ranges::any_of(candidateYs, [&](double existing) { return std::abs(existing - y) <= 0.5; }))
+                            candidateYs.push_back(y);
+                    };
+                    appendX(scaledDesired.x);
+                    appendX(boundsGlobal.x);
+                    appendX(boundsGlobal.x + boundsGlobal.width - width);
+                    appendY(scaledDesired.y);
+                    appendY(boundsGlobal.y);
+                    appendY(boundsGlobal.y + boundsGlobal.height - height);
                     for (const auto& obstacle : obstacles) {
-                        const Rect scaledDesired =
-                            makeRect(clampedDesired.centerX() - width * 0.5, clampedDesired.centerY() - height * 0.5, width, height);
+                        appendX(obstacle.x - width - gap);
+                        appendX(obstacle.x + obstacle.width + gap);
+                        appendX(obstacle.centerX() - width * 0.5);
+                        appendY(obstacle.y - height - gap);
+                        appendY(obstacle.y + obstacle.height + gap);
+                        appendY(obstacle.centerY() - height * 0.5);
                         if (!rectsOverlap(scaledDesired, obstacle))
                             continue;
 
@@ -10129,6 +10244,10 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                     for (const auto& [dx, dy] : offsets) {
                         appendCandidate(makeRect(clampedDesired.centerX() + dx - width * 0.5, clampedDesired.centerY() + dy - height * 0.5, width, height), scale);
                     }
+                    for (const double x : candidateXs) {
+                        for (const double y : candidateYs)
+                            appendCandidate(makeRect(x, y, width, height), scale);
+                    }
                 }
 
                 const bool desiredOnRight = desired.centerX() >= boundsGlobal.centerX();
@@ -10144,13 +10263,11 @@ OverviewController::State OverviewController::buildState(const PHLMONITOR& monit
                 for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex) {
                     const auto& candidate = candidates[candidateIndex];
                     const double scale = candidateIndex < candidateScales.size() ? candidateScales[candidateIndex] : 1.0;
-                    const double dx = candidate.centerX() - desired.centerX();
-                    const double dy = candidate.centerY() - desired.centerY();
-                    const double distance2 = dx * dx + dy * dy;
+                    const double motionDistance2 = edgeAwareMotionDistance2(desired, candidate, boundsGlobal);
                     const double totalOverlap = totalOverlapArea(candidate, obstacles);
                     const double shrink = std::max(0.0, 1.0 - scale);
 
-                    double score = distance2 + shrink * shrink * 45000.0;
+                    double score = motionDistance2 + shrink * shrink * 45000.0;
                     if ((candidate.centerX() >= boundsGlobal.centerX()) != desiredOnRight)
                         score += boundsDiag2 * 4.0;
                     if ((candidate.centerY() >= boundsGlobal.centerY()) != desiredOnBottom)
