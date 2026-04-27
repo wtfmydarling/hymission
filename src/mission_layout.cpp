@@ -834,48 +834,78 @@ void centerNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
     }
 }
 
-void spreadNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
-    if (slots.size() < 5)
+void spreadNaturalAxis(std::vector<WindowSlot>& slots, const Rect& area, bool horizontal, double desiredFill, double maxSpreadScale) {
+    if (slots.size() < 3)
         return;
 
-    double minY = std::numeric_limits<double>::infinity();
-    double maxY = -std::numeric_limits<double>::infinity();
-    double weightedY = 0.0;
+    const double areaStart = horizontal ? area.x : area.y;
+    const double areaLength = horizontal ? area.width : area.height;
+    const double areaEnd = areaStart + areaLength;
+
+    double minEdge = std::numeric_limits<double>::infinity();
+    double maxEdge = -std::numeric_limits<double>::infinity();
+    double weightedCenter = 0.0;
     double totalArea = 0.0;
 
     for (const auto& slot : slots) {
-        minY = std::min(minY, slot.target.y);
-        maxY = std::max(maxY, slot.target.y + slot.target.height);
-        const double area = slot.target.width * slot.target.height;
-        weightedY += slot.target.centerY() * area;
-        totalArea += area;
+        const double start = horizontal ? slot.target.x : slot.target.y;
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double center = start + length * 0.5;
+        const double slotArea = slot.target.width * slot.target.height;
+        minEdge = std::min(minEdge, start);
+        maxEdge = std::max(maxEdge, start + length);
+        weightedCenter += center * slotArea;
+        totalArea += slotArea;
     }
 
-    const double boundsHeight = maxY - minY;
-    const double desiredHeight = area.height * std::clamp(0.54 + static_cast<double>(slots.size()) * 0.008, 0.54, 0.72);
-    if (boundsHeight >= desiredHeight || boundsHeight <= 1.0)
+    const double boundsLength = maxEdge - minEdge;
+    const double desiredLength = areaLength * std::clamp(desiredFill, 0.0, 1.0);
+    if (boundsLength >= desiredLength || boundsLength <= 1.0)
         return;
 
-    const double centerY = totalArea > 0.0 ? weightedY / totalArea : (minY + maxY) / 2.0;
-    const double scale = std::min(1.7, desiredHeight / boundsHeight);
+    const double origin = totalArea > 0.0 ? weightedCenter / totalArea : (minEdge + maxEdge) * 0.5;
+    double       scale = std::min(maxSpreadScale, desiredLength / boundsLength);
 
-    bool canApply = true;
     for (const auto& slot : slots) {
-        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
-        const double y = std::floor(targetCenterY - slot.target.height / 2.0);
-        if (y < area.y || y + slot.target.height > area.y + area.height) {
-            canApply = false;
-            break;
-        }
+        const double start = horizontal ? slot.target.x : slot.target.y;
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double half = length * 0.5;
+        const double center = start + half;
+        const double delta = center - origin;
+        if (std::abs(delta) <= 0.001)
+            continue;
+
+        double axisLimit = scale;
+        if (delta > 0.0)
+            axisLimit = (areaEnd - half - origin) / delta;
+        else
+            axisLimit = (areaStart + half - origin) / delta;
+        if (std::isfinite(axisLimit))
+            scale = std::min(scale, axisLimit);
     }
 
-    if (!canApply)
+    if (scale <= 1.001)
         return;
 
     for (auto& slot : slots) {
-        const double targetCenterY = centerY + (slot.target.centerY() - centerY) * scale;
-        slot.target.y = std::floor(targetCenterY - slot.target.height / 2.0);
+        const double length = horizontal ? slot.target.width : slot.target.height;
+        const double center = (horizontal ? slot.target.x : slot.target.y) + length * 0.5;
+        const double targetCenter = origin + (center - origin) * scale;
+        const double start = std::floor(targetCenter - length * 0.5);
+        if (horizontal)
+            slot.target.x = start;
+        else
+            slot.target.y = start;
+        clampRectToArea(slot.target, area);
     }
+}
+
+void spreadNaturalTargets(std::vector<WindowSlot>& slots, const Rect& area) {
+    const double count = static_cast<double>(slots.size());
+    const double verticalFill = std::clamp(0.78 + count * 0.010, 0.80, 0.94);
+    const double horizontalFill = std::clamp(0.78 + count * 0.008, 0.80, 0.94);
+    spreadNaturalAxis(slots, area, true, horizontalFill, 2.0);
+    spreadNaturalAxis(slots, area, false, verticalFill, 2.0);
 }
 
 std::vector<WindowSlot> materializeNaturalSlots(std::vector<NaturalItem> items, const Rect& area) {
@@ -1058,7 +1088,7 @@ double cornerVoidCost(const std::vector<WindowSlot>& slots, const Rect& area) {
     const double averageEdge = averageEdgeMargin(slots, area);
     const double overflow = std::max(0.0, *maxIt - averageEdge * 5.0);
     const double balance = *maxIt - *minIt;
-    return overflow * 12.0 + balance * 0.8 + *maxIt * 0.08 + edgeBalancePixels(slots, area) * 2.4 + averageGap * 1.8 + maxGap * 0.7;
+    return overflow * 18.0 + balance * 1.0 + *maxIt * 0.10 + edgeBalancePixels(slots, area) * 2.8 + averageGap * 1.6 + maxGap * 0.6;
 }
 
 bool canPlaceSlotTarget(const std::vector<WindowSlot>& slots, std::size_t movingIndex, const Rect& target, const Rect& area, const LayoutConfig& config) {
@@ -1086,7 +1116,7 @@ void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const 
         return;
 
     const auto corners = areaCorners(area);
-    for (int pass = 0; pass < 6; ++pass) {
+    for (int pass = 0; pass < 9; ++pass) {
         const auto distances = nearestCornerDistances(slots, area);
         const double averageEdge = averageEdgeMargin(slots, area);
         const double limit = averageEdge * 5.0;
@@ -1110,7 +1140,7 @@ void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const 
                 return lhs < rhs;
             });
 
-            const std::size_t attempts = std::min<std::size_t>(4, nearestIndexes.size());
+            const std::size_t attempts = std::min<std::size_t>(6, nearestIndexes.size());
             for (std::size_t attempt = 0; attempt < attempts; ++attempt) {
                 const std::size_t nearestIndex = nearestIndexes[attempt];
                 const auto& slot = slots[nearestIndex];
@@ -1118,7 +1148,7 @@ void relieveCornerVoids(std::vector<WindowSlot>& slots, const Rect& area, const 
                 const bool pullTop = corners[corner].second <= area.centerY();
                 const double maxX = pullLeft ? slot.target.x - area.x : area.x + area.width - (slot.target.x + slot.target.width);
                 const double maxY = pullTop ? slot.target.y - area.y : area.y + area.height - (slot.target.y + slot.target.height);
-                const double maxNudge = std::max(24.0, std::min(area.width, area.height) * 0.22);
+                const double maxNudge = std::max(24.0, std::min(area.width, area.height) * 0.30);
                 const double fullX = std::min(std::max(0.0, maxX), maxNudge);
                 const double fullY = std::min(std::max(0.0, maxY), maxNudge);
                 if (fullX <= 0.5 && fullY <= 0.5)
@@ -1260,14 +1290,14 @@ double naturalVisualCost(const std::vector<WindowSlot>& slots, const Rect& area,
     heatStdDev = std::sqrt(heatStdDev / static_cast<double>(heat.size()));
 
     const double heatImbalance = std::abs(leftHeat - rightHeat) + std::abs(topHeat - bottomHeat);
-    const double sparsePenalty = targetAreaRatio < 0.18 ? (0.18 - targetAreaRatio) : 0.0;
-    const double boundsSparsePenalty = boundsFillRatio < 0.72 ? (0.72 - boundsFillRatio) : 0.0;
+    const double sparsePenalty = targetAreaRatio < 0.20 ? (0.20 - targetAreaRatio) : 0.0;
+    const double boundsSparsePenalty = boundsFillRatio < 0.82 ? (0.82 - boundsFillRatio) : 0.0;
     const double readableShortEdge = std::max(1.0, normalizedMinPreviewShortEdge(config, area));
     const double readabilityPenalty = minShortEdge < readableShortEdge ? (readableShortEdge - minShortEdge) / readableShortEdge : 0.0;
 
-    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.0 + edgeWhitespace * 1.8 + cornerBalance * 1.5 +
-        cornerWhitespace * 0.45 + cornerEdgeOverflow * 8.0 + averageGapOverflow * 5.0 + maxGapOverflow * 3.5 + sparsePenalty * 2.8 +
-        boundsSparsePenalty * 2.4 + readabilityPenalty * 14.0 - targetAreaRatio * 1.6 - averageScale * 0.35;
+    return heatStdDev * 2.4 + heatImbalance * 0.42 + gravityOffset * 3.0 + edgeBalance * 2.4 + edgeWhitespace * 3.2 + cornerBalance * 1.5 +
+        cornerWhitespace * 0.45 + cornerEdgeOverflow * 8.0 + averageGapOverflow * 5.0 + maxGapOverflow * 3.5 + sparsePenalty * 3.4 +
+        boundsSparsePenalty * 4.0 + readabilityPenalty * 14.0 - targetAreaRatio * 1.9 - averageScale * 0.35;
 }
 
 Rect scaledSlotTarget(const WindowSlot& slot, double scale, const Rect& area, const LayoutConfig& config, double anchorX, double anchorY) {
@@ -1463,6 +1493,7 @@ std::optional<std::vector<WindowSlot>> computeNaturalLayout(const std::vector<Pr
         enforceInputOrderScaleGradient(candidate, prepared, area, config);
         relieveCornerVoids(candidate, area, config);
         expandSparseSlots(candidate, prepared, area, config);
+        relieveCornerVoids(candidate, area, config);
         const double cost = naturalVisualCost(candidate, area, config) + costBias;
         if (!bestSlots || cost < bestCost) {
             bestCost = cost;
